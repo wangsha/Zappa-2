@@ -304,6 +304,9 @@ class Zappa:
         if desired_role_arn:
             self.credentials_arn = desired_role_arn
 
+        if architecture:
+            self.architecture = architecture
+
         self.runtime = runtime
 
         if self.runtime == "python3.6":
@@ -1281,8 +1284,6 @@ class Zappa:
         Optionally, delete previous versions if they exceed the optional limit.
         """
         print("Updating Lambda function code..")
-
-        kwargs = dict(FunctionName=function_name, Publish=publish)
         if docker_image_uri:
             kwargs["ImageUri"] = docker_image_uri
         elif local_zip:
@@ -1374,7 +1375,6 @@ class Zappa:
         Given an existing function ARN, update the configuration variables.
         """
         print("Updating Lambda function configuration..")
-
         if not vpc_config:
             vpc_config = {}
         if not self.credentials_arn:
@@ -1414,6 +1414,7 @@ class Zappa:
             "Environment": {"Variables": aws_environment_variables},
             "KMSKeyArn": aws_kms_key_arn,
             "TracingConfig": {"Mode": "Active" if self.xray_tracing else "PassThrough"},
+            "Architectures": architecture
         }
 
         if lambda_aws_config["PackageType"] != "Image":
