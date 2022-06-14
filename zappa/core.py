@@ -1284,6 +1284,7 @@ class Zappa:
         Optionally, delete previous versions if they exceed the optional limit.
         """
         print("Updating Lambda function code..")
+        kwargs = dict(FunctionName=function_name, Publish=publish, Architectures=architecture)
         if docker_image_uri:
             kwargs["ImageUri"] = docker_image_uri
         elif local_zip:
