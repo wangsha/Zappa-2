@@ -2935,15 +2935,17 @@ class Zappa:
             if policy_response["ResponseMetadata"]["HTTPStatusCode"] == 200:
                 statement = json.loads(policy_response["Policy"])["Statement"]
                 for s in statement:
-                    delete_response = self.lambda_client.remove_permission(
-                        FunctionName=lambda_name, StatementId=s["Sid"]
-                    )
-                    if delete_response["ResponseMetadata"]["HTTPStatusCode"] != 204:
-                        logger.error(
-                            "Failed to delete an obsolete policy statement: {}".format(
-                                policy_response
-                            )
+                    if s['Sid'].startswith('zappa-'):
+                        logger.debug(f"delete policy {s['Sid']}-{s['Principal']}")
+                        delete_response = self.lambda_client.remove_permission(
+                            FunctionName=lambda_name, StatementId=s["Sid"]
                         )
+                        if delete_response["ResponseMetadata"]["HTTPStatusCode"] != 204:
+                            logger.error(
+                                "Failed to delete an obsolete policy statement: {}".format(
+                                    policy_response
+                                )
+                            )
             else:
                 logger.debug(
                     "Failed to load Lambda function policy: {}".format(policy_response)
@@ -2971,7 +2973,7 @@ class Zappa:
 
         permission_response = self.lambda_client.add_permission(
             FunctionName=lambda_name,
-            StatementId="".join(
+            StatementId="zappa-"+"".join(
                 random.choice(string.ascii_uppercase + string.digits) for _ in range(8)
             ),
             Action="lambda:InvokeFunction",
