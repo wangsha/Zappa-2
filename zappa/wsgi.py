@@ -48,7 +48,7 @@ def create_wsgi_request(
     if "queryStringParameters" in event_info:
         query_dict = event_info.get("queryStringParameters", {})
     else:
-        query_dict = event_info["multiValueQueryStringParameters"]
+        query_dict = event_info.get("multiValueQueryStringParameters", {})
         do_seq = True
 
     new_query_dict = {}
