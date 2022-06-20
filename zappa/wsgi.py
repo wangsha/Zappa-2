@@ -1,7 +1,7 @@
 import base64
 import logging
 import sys
-from urllib.parse import urlencode
+from urllib.parse import urlencode, unquote_plus
 
 import six
 from requestlogger import ApacheFormatter
@@ -45,21 +45,30 @@ def create_wsgi_request(
     query_dict = {}
     do_seq = False
     query_string = ""
-    if "multiValueQueryStringParameters" in event_info:
+    if "queryStringParameters" in event_info:
+        query_dict = event_info.get("queryStringParameters", {})
+    else:
         query_dict = event_info["multiValueQueryStringParameters"]
         do_seq = True
-    else:
-        query_dict = event_info.get("queryStringParameters", {})
 
-    if query_dict:
+    new_query_dict = {}
+    for (
+        key,
+        value,
+    ) in query_dict.items():
         # test query already encoded
         # {
         #     'where%3D%7B%22template%22%3A%20%2251f63e0838345b6dcd7eabff%22%7D': ''
         # }
-        if len(query_dict) == 1 and list(query_dict.values())[0]:
-            query_string = list(query_dict.keys())[0]
-        else:
-            query_string = urlencode(query_dict, doseq=do_seq)
+        # {
+        #     'where={"template": "51f63e0838345b6dcd7eabff"}': ''
+        # }
+        new_query_dict[unquote_plus(key)] = (
+            value if isinstance(value, list) else unquote_plus(value)
+        )
+
+    if new_query_dict:
+        query_string = urlencode(new_query_dict, doseq=do_seq)
 
     if context_header_mappings:
         for key, value in context_header_mappings.items():
