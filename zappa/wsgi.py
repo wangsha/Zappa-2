@@ -41,12 +41,25 @@ def create_wsgi_request(
         we have to check for the existence of one and then fall back to the
         other.
         """
+
+    query_dict = {}
+    do_seq = False
+    query_string = ""
     if "multiValueQueryStringParameters" in event_info:
-        query = event_info["multiValueQueryStringParameters"]
-        query_string = urlencode(query, doseq=True) if query else ""
+        query_dict = event_info["multiValueQueryStringParameters"]
+        do_seq = True
     else:
-        query = event_info.get("queryStringParameters", {})
-        query_string = urlencode(query) if query else ""
+        query_dict = event_info.get("queryStringParameters", {})
+
+    if query_dict:
+        # test query already encoded
+        # {
+        #     'where%3D%7B%22template%22%3A%20%2251f63e0838345b6dcd7eabff%22%7D': ''
+        # }
+        if len(query_dict) == 1 and list(query_dict.values())[0]:
+            query_string = list(query_dict.keys())[0]
+        else:
+            query_string = urlencode(query_dict, do_seq=do_seq)
 
     if context_header_mappings:
         for key, value in context_header_mappings.items():

@@ -284,7 +284,7 @@ class Zappa:
         tags=(),
         endpoint_urls={},
         xray_tracing=False,
-        architecture=None
+        architecture=None,
     ):
         """
         Instantiate this new Zappa instance, loading any custom credentials if necessary.
@@ -330,7 +330,6 @@ class Zappa:
         )
         self.manylinux_wheel_abi3_file_match = re.compile(
             f'^.*cp3.-abi3-manylinux({"|".join(manylinux_suffixes)})_{self.architecture}.whl$'
-
         )
 
         self.endpoint_urls = endpoint_urls
@@ -1186,7 +1185,7 @@ class Zappa:
         layers=None,
         concurrency=None,
         docker_image_uri=None,
-        architecture=None
+        architecture=None,
     ):
         """
         Given a bucket and key (or a local path) of a valid Lambda-zip, a function name and a handler, register that Lambda function.
@@ -1279,14 +1278,16 @@ class Zappa:
         num_revisions=None,
         concurrency=None,
         docker_image_uri=None,
-        architecture=None
+        architecture=None,
     ):
         """
         Given a bucket and key (or a local path) of a valid Lambda-zip, a function name and a handler, update that Lambda function's code.
         Optionally, delete previous versions if they exceed the optional limit.
         """
         print("Updating Lambda function code..")
-        kwargs = dict(FunctionName=function_name, Publish=publish, Architectures=architecture)
+        kwargs = dict(
+            FunctionName=function_name, Publish=publish, Architectures=architecture
+        )
         if docker_image_uri:
             kwargs["ImageUri"] = docker_image_uri
         elif local_zip:
@@ -1373,7 +1374,7 @@ class Zappa:
         aws_kms_key_arn=None,
         layers=None,
         wait=True,
-        architecture=None
+        architecture=None,
     ):
         """
         Given an existing function ARN, update the configuration variables.
@@ -2935,7 +2936,7 @@ class Zappa:
             if policy_response["ResponseMetadata"]["HTTPStatusCode"] == 200:
                 statement = json.loads(policy_response["Policy"])["Statement"]
                 for s in statement:
-                    if s['Sid'].startswith('zappa-'):
+                    if s["Sid"].startswith("zappa-"):
                         logger.debug(f"delete policy {s['Sid']}-{s['Principal']}")
                         delete_response = self.lambda_client.remove_permission(
                             FunctionName=lambda_name, StatementId=s["Sid"]
@@ -2973,7 +2974,8 @@ class Zappa:
 
         permission_response = self.lambda_client.add_permission(
             FunctionName=lambda_name,
-            StatementId="zappa-"+"".join(
+            StatementId="zappa-"
+            + "".join(
                 random.choice(string.ascii_uppercase + string.digits) for _ in range(8)
             ),
             Action="lambda:InvokeFunction",

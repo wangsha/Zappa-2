@@ -1179,7 +1179,6 @@ class ZappaCLI:
             layers=self.layers,
             wait=False,
             architecture=self.architecture,
-
         )
 
         # Finally, delete the local copy our zip package
@@ -2641,7 +2640,7 @@ class ZappaCLI:
             tags=self.tags,
             endpoint_urls=self.stage_config.get("aws_endpoint_urls", {}),
             xray_tracing=self.xray_tracing,
-            architecture=self.architecture
+            architecture=self.architecture,
         )
 
         for setting in CUSTOM_SETTINGS:
