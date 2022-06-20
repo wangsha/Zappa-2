@@ -59,7 +59,7 @@ def create_wsgi_request(
         if len(query_dict) == 1 and list(query_dict.values())[0]:
             query_string = list(query_dict.keys())[0]
         else:
-            query_string = urlencode(query_dict, do_seq=do_seq)
+            query_string = urlencode(query_dict, doseq=do_seq)
 
     if context_header_mappings:
         for key, value in context_header_mappings.items():
