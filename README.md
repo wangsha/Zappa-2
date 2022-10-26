@@ -453,6 +453,8 @@ Zappa can be deployed to custom domain names and subdomains with custom SSL cert
 
 Currently, the easiest of these to use are the AWS Certificate Manager certificates, as they are free, self-renewing, and require the least amount of work.
 
+APIGateway and Lambda FunctionURL both support custom domains. FunctionURL is implemented via cloudfront distribution. Set `domain` for APIGateway and `function_url_domains` for FunctionURL.
+
 Once configured as described below, all of these methods use the same command:
 
     $ zappa certify
@@ -879,6 +881,8 @@ to change Zappa's behavior. Use these at your own risk!
               "maxAge": 0 // The maximum amount of time, in seconds, that web browsers can cache results of a preflight request. default 0.
             }
         },
+        "function_url_cloudfront_config": {}, // see https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/cloudfront.html#CloudFront.Client.create_distribution
+        "function_url_custom_domains": [], // a list of custom domains.
         "async_source": "sns", // Source of async tasks. Defaults to "lambda"
         "async_resources": true, // Create the SNS topic and DynamoDB table to use. Defaults to true.
         "async_response_table": "your_dynamodb_table_name",  // the DynamoDB table name to use for captured async responses; defaults to None (can't capture)

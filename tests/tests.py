@@ -2800,6 +2800,252 @@ class TestZappa(unittest.TestCase):
         boto_mock.client().create_function_url_config.assert_not_called()
         boto_mock.client().update_function_url_config.assert_not_called()
 
+    def test_function_url_create_custom_domain(self):
+        cloud_front_response = {
+            "ResponseMetadata": {
+                "RequestId": "e4410b01-e391-45d4-abe8-4f86508e0619",
+                "HTTPStatusCode": 201,
+                "RetryAttempts": 0,
+            },
+            "Location": "https://cloudfront.amazonaws.com/2020-05-31/distribution/E1YIU775JNY3JV",
+            "ETag": "E1YQ89D7I4GX4C",
+            "Distribution": {
+                "Id": "E1YIU775JNY3JV",
+                "ARN": "arn:aws:cloudfront::123456789:distribution/E1YIU775JNY3JV",
+                "Status": "InProgress",
+                "InProgressInvalidationBatches": 0,
+                "DomainName": "dolayrplf7f1.cloudfront.net",
+                "ActiveTrustedSigners": {"Enabled": False, "Quantity": 0},
+                "ActiveTrustedKeyGroups": {"Enabled": False, "Quantity": 0},
+                "DistributionConfig": {
+                    "CallerReference": "zappa-create-function-url-custom-domain",
+                    "Aliases": {"Quantity": 0},
+                    "DefaultRootObject": "",
+                    "Origins": {
+                        "Quantity": 1,
+                        "Items": [
+                            {
+                                "Id": "LambdaFunctionURL",
+                                "DomainName": "wwvjk2tpuvrr457k3xt4kuryby0qmmzs.lambda-url.ap-southeast-1.on.aws",
+                                "OriginPath": "",
+                                "CustomHeaders": {"Quantity": 0},
+                                "CustomOriginConfig": {
+                                    "HTTPPort": 80,
+                                    "HTTPSPort": 443,
+                                    "OriginProtocolPolicy": "https-only",
+                                    "OriginSslProtocols": {"Quantity": 3, "Items": ["TLSv1", "TLSv1.1", "TLSv1.2"]},
+                                    "OriginReadTimeout": 30,
+                                    "OriginKeepaliveTimeout": 5,
+                                },
+                                "ConnectionAttempts": 3,
+                                "ConnectionTimeout": 10,
+                                "OriginShield": {"Enabled": False},
+                                "OriginAccessControlId": "",
+                            }
+                        ],
+                    },
+                    "OriginGroups": {"Quantity": 0},
+                    "DefaultCacheBehavior": {
+                        "TargetOriginId": "LambdaFunctionURL",
+                        "TrustedSigners": {"Enabled": False, "Quantity": 0},
+                        "TrustedKeyGroups": {"Enabled": False, "Quantity": 0},
+                        "ViewerProtocolPolicy": "redirect-to-https",
+                        "AllowedMethods": {
+                            "Quantity": 7,
+                            "Items": ["HEAD", "DELETE", "POST", "GET", "OPTIONS", "PUT", "PATCH"],
+                            "CachedMethods": {"Quantity": 3, "Items": ["HEAD", "GET", "OPTIONS"]},
+                        },
+                        "SmoothStreaming": False,
+                        "Compress": True,
+                        "LambdaFunctionAssociations": {"Quantity": 0},
+                        "FunctionAssociations": {"Quantity": 0},
+                        "FieldLevelEncryptionId": "",
+                        "ForwardedValues": {
+                            "QueryString": True,
+                            "Cookies": {"Forward": "all"},
+                            "Headers": {"Quantity": 3, "Items": ["Authorization", "Accept", "x-api-key"]},
+                            "QueryStringCacheKeys": {"Quantity": 0},
+                        },
+                    },
+                    "CacheBehaviors": {"Quantity": 0},
+                    "CustomErrorResponses": {"Quantity": 0},
+                    "Comment": "Lambda FunctionURL zappa-function-url-test-dev",
+                    "Logging": {"Enabled": False, "IncludeCookies": False, "Bucket": "", "Prefix": ""},
+                    "PriceClass": "PriceClass_100",
+                    "Enabled": True,
+                    "ViewerCertificate": {
+                        "CloudFrontDefaultCertificate": True,
+                        "SSLSupportMethod": "vip",
+                        "MinimumProtocolVersion": "TLSv1",
+                        "CertificateSource": "cloudfront",
+                    },
+                    "Restrictions": {"GeoRestriction": {"RestrictionType": "none", "Quantity": 0}},
+                    "WebACLId": "",
+                    "HttpVersion": "http2",
+                    "IsIPV6Enabled": True,
+                },
+            },
+        }
+        boto_mock = mock.MagicMock()
+        zappa_core = Zappa(
+            boto_session=boto_mock,
+            profile_name="test",
+            aws_region="test",
+            load_credentials=True,
+        )
+        function_name = "abc"
+        function_arn = "arn:aws:lambda:ap-southeast-1:123456789:function:{}".format(function_name)
+        function_domains = ["function-url-domain.example.com", "function-url-domain-1.example.com"]
+        cert_arn = "arn:aws:acm:us-east-1:123456789:certificate/77bff5cb-03c7-4b11-ba8e-312e6f49a31f"
+        cloudfront_config = {}
+        zappa_core.lambda_client.list_function_url_configs.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "FunctionUrlConfigs": [
+                {
+                    "FunctionUrl": "https://123456789.lambda-url.ap-southeast-1.on.aws/",
+                    "FunctionArn": function_arn,
+                }
+            ],
+        }
+        zappa_core.cloudfront_client.list_distributions.return_value ={
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "DistributionList": {
+                "Items": []
+            },
+
+        }
+        zappa_core.cloudfront_client.create_distribution.return_value = cloud_front_response
+        domains = zappa_core.update_lambda_function_url_domains(
+            function_arn, function_domains, cert_arn, cloudfront_config
+        )
+        boto_mock.client().list_function_url_configs.assert_called_with(
+            FunctionName=function_arn, MaxItems=50
+        )
+        boto_mock.client().list_distributions.assert_called()
+        boto_mock.client().create_distribution.assert_called()
+        assert domains
+
+    def test_function_url_update_custom_domain(self):
+        cloud_front_distribution ={
+                "Id": "E1YIU775JNY3JV",
+                "ARN": "arn:aws:cloudfront::123456789:distribution/E1YIU775JNY3JV",
+                "Status": "InProgress",
+                "InProgressInvalidationBatches": 0,
+                "DomainName": "dolayrplf7f1.cloudfront.net",
+                "ActiveTrustedSigners": {"Enabled": False, "Quantity": 0},
+                "ActiveTrustedKeyGroups": {"Enabled": False, "Quantity": 0},
+                "Origins": {
+                    "Quantity": 1,
+                    "Items": [
+                        {
+                            "Id": "LambdaFunctionURL",
+                            "DomainName": "123456789.lambda-url.ap-southeast-1.on.aws",
+                        }
+                    ],
+                },
+                "DistributionConfig": {
+                    "CallerReference": "zappa-create-function-url-custom-domain",
+                    "Aliases": {"Quantity": 0},
+                    "DefaultRootObject": "",
+
+                    "OriginGroups": {"Quantity": 0},
+                    "DefaultCacheBehavior": {
+                        "TargetOriginId": "LambdaFunctionURL",
+                        "TrustedSigners": {"Enabled": False, "Quantity": 0},
+                        "TrustedKeyGroups": {"Enabled": False, "Quantity": 0},
+                        "ViewerProtocolPolicy": "redirect-to-https",
+                        "AllowedMethods": {
+                            "Quantity": 7,
+                            "Items": ["HEAD", "DELETE", "POST", "GET", "OPTIONS", "PUT", "PATCH"],
+                            "CachedMethods": {"Quantity": 3, "Items": ["HEAD", "GET", "OPTIONS"]},
+                        },
+                        "SmoothStreaming": False,
+                        "Compress": True,
+                        "LambdaFunctionAssociations": {"Quantity": 0},
+                        "FunctionAssociations": {"Quantity": 0},
+                        "FieldLevelEncryptionId": "",
+                        "ForwardedValues": {
+                            "QueryString": True,
+                            "Cookies": {"Forward": "all"},
+                            "Headers": {"Quantity": 3, "Items": ["Authorization", "Accept", "x-api-key"]},
+                            "QueryStringCacheKeys": {"Quantity": 0},
+                        },
+                    },
+                    "CacheBehaviors": {"Quantity": 0},
+                    "CustomErrorResponses": {"Quantity": 0},
+                    "Comment": "Lambda FunctionURL zappa-function-url-test-dev",
+                    "Logging": {"Enabled": False, "IncludeCookies": False, "Bucket": "", "Prefix": ""},
+                    "PriceClass": "PriceClass_100",
+                    "Enabled": True,
+                    "ViewerCertificate": {
+                        "CloudFrontDefaultCertificate": True,
+                        "SSLSupportMethod": "vip",
+                        "MinimumProtocolVersion": "TLSv1",
+                        "CertificateSource": "cloudfront",
+                    },
+                    "Restrictions": {"GeoRestriction": {"RestrictionType": "none", "Quantity": 0}},
+                    "WebACLId": "",
+                    "HttpVersion": "http2",
+                    "IsIPV6Enabled": True,
+                },
+            }
+        cloud_front_response = {
+            "ResponseMetadata": {
+                "RequestId": "e4410b01-e391-45d4-abe8-4f86508e0619",
+                "HTTPStatusCode": 200,
+                "RetryAttempts": 0,
+            },
+            "Location": "https://cloudfront.amazonaws.com/2020-05-31/distribution/E1YIU775JNY3JV",
+            "ETag": "E1YQ89D7I4GX4C",
+            "Distribution": cloud_front_distribution,
+        }
+        boto_mock = mock.MagicMock()
+        zappa_core = Zappa(
+            boto_session=boto_mock,
+            profile_name="test",
+            aws_region="test",
+            load_credentials=True,
+        )
+        function_name = "abc"
+        function_arn = "arn:aws:lambda:ap-southeast-1:123456789:function:{}".format(function_name)
+        function_domains = ["function-url-domain.example.com", "function-url-domain-1.example.com"]
+        cert_arn = "arn:aws:acm:us-east-1:123456789:certificate/77bff5cb-03c7-4b11-ba8e-312e6f49a31f"
+        cloudfront_config = {}
+        zappa_core.lambda_client.list_function_url_configs.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "FunctionUrlConfigs": [
+                {
+                    "FunctionUrl": "https://123456789.lambda-url.ap-southeast-1.on.aws/",
+                    "FunctionArn": function_arn,
+                }
+            ],
+        }
+        zappa_core.cloudfront_client.list_distributions.return_value ={
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "DistributionList": {
+                "Items": [cloud_front_distribution]
+            },
+
+        }
+        zappa_core.cloudfront_client.update_distribution.return_value = cloud_front_response
+        domains = zappa_core.update_lambda_function_url_domains(
+            function_arn, function_domains, cert_arn, cloudfront_config
+        )
+        boto_mock.client().list_function_url_configs.assert_called_with(
+            FunctionName=function_arn, MaxItems=50
+        )
+        boto_mock.client().list_distributions.assert_called()
+        boto_mock.client().update_distribution.assert_called()
+        assert domains
+
     @mock.patch("sys.version_info", new_callable=get_unsupported_sys_versioninfo)
     def test_unsupported_version_error(self, *_):
         from importlib import reload
