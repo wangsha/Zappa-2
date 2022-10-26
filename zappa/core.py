@@ -1,6 +1,7 @@
 """
 Zappa core library. You may also want to look at `cli.py` and `util.py`.
 """
+import datetime
 
 ##
 # Imports
@@ -19,6 +20,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import urllib
 import uuid
 import zipfile
 from builtins import bytes, int
@@ -363,6 +365,7 @@ class Zappa:
             self.dynamodb_client = self.boto_client("dynamodb")
             self.cognito_client = self.boto_client("cognito-idp")
             self.sts_client = self.boto_client("sts")
+            self.cloudfront_client = self.boto_client("cloudfront")
 
         self.tags = tags
         self.cf_template = troposphere.Template()
@@ -1462,6 +1465,200 @@ class Zappa:
         )
 
     ##
+    # Function URL
+    ##
+    def list_function_url_policy(self, function_name):
+        results = []
+        try:
+            policy_response = self.lambda_client.get_policy(FunctionName=function_name)
+            if policy_response["ResponseMetadata"]["HTTPStatusCode"] == 200:
+                statement = json.loads(policy_response["Policy"])["Statement"]
+                for s in statement:
+                    if s["Sid"] in ["FunctionURLAllowPublicAccess"]:
+                        results.append(s)
+            else:
+                logger.debug("Failed to load Lambda function policy: {}".format(policy_response))
+        except ClientError as e:
+            if e.args[0].find("ResourceNotFoundException") > -1:
+                logger.debug("No policy found, must be first run.")
+            else:
+                logger.error("Unexpected client error {}".format(e.args[0]))
+        return results
+
+    def delete_function_url_policy(self, function_name):
+        statements = self.list_function_url_policy(function_name)
+        for s in statements:
+            delete_response = self.lambda_client.remove_permission(FunctionName=function_name, StatementId=s["Sid"])
+            if delete_response["ResponseMetadata"]["HTTPStatusCode"] != 204:
+                logger.error("Failed to delete an obsolete policy statement: {}".format(delete_response))
+
+    def update_function_url_policy(self, function_name, function_url_config):
+        statements = self.list_function_url_policy(function_name)
+
+        if function_url_config["authorizer"] == "NONE":
+            if not statements:
+                permission_response = self.lambda_client.add_permission(
+                    FunctionName=function_name,
+                    StatementId="FunctionURLAllowPublicAccess",
+                    Action="lambda:InvokeFunctionUrl",
+                    Principal="*",
+                    FunctionUrlAuthType=function_url_config["authorizer"],
+                )
+        elif function_url_config["authorizer"] == "AWS_IAM":
+            if statements:
+                self.delete_function_url_policy(function_name)
+
+    def deploy_lambda_function_url(self, function_name, function_url_config):
+
+        response = self.lambda_client.create_function_url_config(
+            FunctionName=function_name,
+            AuthType=function_url_config["authorizer"],
+            Cors={
+                "AllowCredentials": function_url_config["cors"]["allowCredentials"],
+                "AllowHeaders": function_url_config["cors"]["allowedHeaders"],
+                "AllowMethods": function_url_config["cors"]["allowedMethods"],
+                "AllowOrigins": function_url_config["cors"]["allowedOrigins"],
+                "ExposeHeaders": function_url_config["cors"]["exposedResponseHeaders"],
+                "MaxAge": function_url_config["cors"]["maxAge"],
+            },
+        )
+        print("function URL address: {}".format(response["FunctionUrl"]))
+        self.update_function_url_policy(function_name, function_url_config)
+        return response
+
+    def update_lambda_function_url(self, function_name, function_url_config):
+        response = self.lambda_client.list_function_url_configs(FunctionName=function_name, MaxItems=50)
+        if response.get("FunctionUrlConfigs", []):
+            for config in response["FunctionUrlConfigs"]:
+                response = self.lambda_client.update_function_url_config(
+                    FunctionName=config["FunctionArn"],
+                    AuthType=function_url_config["authorizer"],
+                    Cors={
+                        "AllowCredentials": function_url_config["cors"]["allowCredentials"],
+                        "AllowHeaders": function_url_config["cors"]["allowedHeaders"],
+                        "AllowMethods": function_url_config["cors"]["allowedMethods"],
+                        "AllowOrigins": function_url_config["cors"]["allowedOrigins"],
+                        "ExposeHeaders": function_url_config["cors"]["exposedResponseHeaders"],
+                        "MaxAge": function_url_config["cors"]["maxAge"],
+                    },
+                )
+                print("function URL address: {}".format(response["FunctionUrl"]))
+                self.update_function_url_policy(config["FunctionArn"], function_url_config)
+        else:
+            self.deploy_lambda_function_url(function_name, function_url_config)
+
+    def delete_lambda_function_url(self, function_name):
+        response = self.lambda_client.list_function_url_configs(FunctionName=function_name, MaxItems=50)
+        for config in response.get("FunctionUrlConfigs", []):
+            resp = self.lambda_client.delete_function_url_config(FunctionName=config["FunctionArn"])
+            if resp["ResponseMetadata"]["HTTPStatusCode"] == 204:
+                print("function URL deleted: {}".format(config["FunctionUrl"]))
+            self.delete_function_url_policy(config["FunctionArn"])
+
+    ##
+    # Cloudfront distribution
+    ##
+    def update_lambda_function_url_domains(self, function_name, function_url_domains, certificate_arn, cloudfront_config):
+        response = self.lambda_client.list_function_url_configs(FunctionName=function_name, MaxItems=50)
+        if not response.get("FunctionUrlConfigs", []):
+            print("no function url configured on lambda, skip setting custom domains")
+        url = response["FunctionUrlConfigs"][0]["FunctionUrl"]
+        url = urllib.parse.urlparse(url)
+
+        NULL_CONFIG = {"Quantity": 0, "Items": []}
+        config = {
+            "CallerReference": "zappa-create-function-url-custom-domain",
+            "Aliases": {"Quantity": len(function_url_domains), "Items": function_url_domains},
+            "DefaultRootObject": "",
+            "Enabled": True,
+            "PriceClass": "PriceClass_100",
+            "HttpVersion": "http2",
+            "Comment": "Lambda FunctionURL {}".format(function_name.split(":")[-1]),
+            "Origins": {
+                "Quantity": 1,
+                "Items": [
+                    {
+                        "Id": "LambdaFunctionURL",
+                        "DomainName": url.hostname,
+                        "OriginPath": "",
+                        "CustomHeaders": {
+                            "Quantity": 1,
+                            "Items": [
+                                {"HeaderName": "CloudFront", "HeaderValue": "CloudFront"},
+                            ],
+                        },
+                        "CustomOriginConfig": {
+                            "HTTPPort": 80,
+                            "HTTPSPort": 443,
+                            "OriginProtocolPolicy": "https-only",
+                            "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1"]},
+                            "OriginReadTimeout": 60,
+                            "OriginKeepaliveTimeout": 60,
+                        },
+                    }
+                ],
+            },
+            "CacheBehaviors": NULL_CONFIG,
+            "CustomErrorResponses": NULL_CONFIG,
+            "DefaultCacheBehavior": {
+                "TargetOriginId": "LambdaFunctionURL",
+                "ViewerProtocolPolicy": "redirect-to-https",
+                "Compress": True,
+                "SmoothStreaming": True,
+                "LambdaFunctionAssociations": NULL_CONFIG,
+                "FieldLevelEncryptionId": "",
+                "AllowedMethods": {
+                    "Quantity": 7,
+                    "Items": ["HEAD", "DELETE", "POST", "GET", "OPTIONS", "PUT", "PATCH"],
+                    "CachedMethods": {"Quantity": 3, "Items": ["HEAD", "GET", "OPTIONS"]},
+                },
+                "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",  # no cache, details see https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-cache-policies.html
+            },
+            "Logging": {"Enabled": False, "IncludeCookies": False, "Bucket": "", "Prefix": ""},
+            "Restrictions": {"GeoRestriction": {"RestrictionType": "none", **NULL_CONFIG}},
+            "WebACLId": "",
+        }
+        if certificate_arn:
+            config["ViewerCertificate"] = {
+                "ACMCertificateArn": certificate_arn,
+                "SSLSupportMethod": "sni-only",
+                "MinimumProtocolVersion": "TLSv1.2_2021",
+            }
+
+        config.update(cloudfront_config)
+        distributions = self.cloudfront_client.list_distributions()
+        distributions = [
+            item
+            for item in distributions["DistributionList"]["Items"]
+            if url.hostname in [origin["DomainName"] for origin in item["Origins"]["Items"]]
+        ]
+
+        if not distributions:
+            response = self.cloudfront_client.create_distribution(DistributionConfig=config)
+            if response["ResponseMetadata"]["HTTPStatusCode"] == 201:
+                print(
+                    "created cloudfront distribution for {}. It will take a while for the change to be deployed.".format(
+                        function_url_domains
+                    )
+                )
+                return response["Distribution"]["DomainName"]
+        else:
+            id = distributions[0]["Id"]
+            distribution = self.cloudfront_client.get_distribution(Id=id)
+            new_config = distribution["Distribution"]["DistributionConfig"]
+            new_config.update(config)
+
+            response = self.cloudfront_client.update_distribution(
+                DistributionConfig=new_config, Id=id, IfMatch=distribution["ETag"]
+            )
+            if response["ResponseMetadata"]["HTTPStatusCode"] == 200:
+                print(
+                    "update cloudfront distribution for {}. It will take a while for the change to be deployed.".format(
+                        function_url_domains
+                    )
+                )
+                return response["Distribution"]["DomainName"]
+
     # Application load balancer
     ##
 
@@ -2105,6 +2302,41 @@ class Zappa:
                 continue
             yield api
 
+    def undeploy_function_url_custom_domain(self, lambda_name, domains=None):
+
+        response = self.lambda_client.list_function_url_configs(FunctionName=lambda_name, MaxItems=50)
+        if not response.get("FunctionUrlConfigs", []):
+            print("no function url configured on lambda. skip delete custom domains")
+        url = response["FunctionUrlConfigs"][0]["FunctionUrl"]
+        url = urllib.parse.urlparse(url)
+        distributions = self.cloudfront_client.list_distributions()
+        distributions = [
+            item
+            for item in distributions["DistributionList"]["Items"]
+            if url.hostname in [origin["DomainName"] for origin in item["Origins"]["Items"]]
+        ]
+
+        for distribution in distributions:
+            id = distribution["Id"]
+            distribution = self.cloudfront_client.get_distribution(Id=id)
+            new_config = distribution["Distribution"]["DistributionConfig"]
+            new_config["Enabled"] = False
+
+            response = self.cloudfront_client.update_distribution(
+                DistributionConfig=new_config, Id=id, IfMatch=distribution["ETag"]
+            )
+            response
+            print("wait for distribution to be disabled.")
+            waiter = self.cloudfront_client.get_waiter("distribution_deployed")
+            waiter.wait(Id=id, WaiterConfig={"Delay": 20, "MaxAttempts": 20})
+            delete_response = self.cloudfront_client.delete_distribution(Id=id, IfMatch=response["ETag"])
+            if delete_response["ResponseMetadata"]["HTTPStatusCode"] == 204:
+                print("cloudfront distribution deleted")
+
+            # attempt remove 53 record
+            for domain in distribution["Distribution"]["DistributionConfig"]["Aliases"].get("Items", []):
+                self.delete_route53_records(domain, distribution["Distribution"]["DomainName"])
+
     def undeploy_api_gateway(self, lambda_name, domain_name=None, base_path=None):
         """
         Delete a deployed REST API Gateway.
@@ -2466,17 +2698,19 @@ class Zappa:
                 certificateName=certificate_name,
                 certificateArn=certificate_arn,
             )
+            api_id = self.get_api_id(lambda_name)
+            if not api_id:
+                raise LookupError("No API URL to certify found - did you deploy?")
 
-        api_id = self.get_api_id(lambda_name)
-        if not api_id:
-            raise LookupError("No API URL to certify found - did you deploy?")
+            self.apigateway_client.create_base_path_mapping(
+                domainName=domain_name,
+                basePath="" if base_path is None else base_path,
+                restApiId=api_id,
+                stage=stage,
+            )
 
-        self.apigateway_client.create_base_path_mapping(
-            domainName=domain_name,
-            basePath="" if base_path is None else base_path,
-            restApiId=api_id,
-            stage=stage,
-        )
+        if self.function_url_enabled:
+            pass
 
         return agw_response["distributionDomainName"]
 
@@ -2520,6 +2754,41 @@ class Zappa:
 
         return response
 
+    def delete_route53_records(self, domain_name, dns_name):
+        """
+        Updates Route53 Records following GW domain creation
+        """
+        zone_id = self.get_hosted_zone_id_for_domain(domain_name)
+
+        is_apex = self.route53.get_hosted_zone(Id=zone_id)["HostedZone"]["Name"][:-1] == domain_name
+        if is_apex:
+            record_set = {
+                "Name": domain_name,
+                "Type": "A",
+                "AliasTarget": {
+                    "HostedZoneId": "Z2FDTNDATAQYW2",  # This is a magic value that means "CloudFront"
+                    "DNSName": dns_name,
+                    "EvaluateTargetHealth": False,
+                },
+            }
+        else:
+            record_set = {
+                "Name": domain_name,
+                "Type": "CNAME",
+                "ResourceRecords": [{"Value": dns_name}],
+                "TTL": 60,
+            }
+
+        response = self.route53.change_resource_record_sets(
+            HostedZoneId=zone_id,
+            ChangeBatch={"Changes": [{"Action": "DELETE", "ResourceRecordSet": record_set}]},
+        )
+
+        if response["ResponseMetadata"]["HTTPStatusCode"] == 200:
+            print("removed route 53 record for {}".format(domain_name))
+
+        return response
+
     def update_domain_name(
         self,
         domain_name,
@@ -2532,6 +2801,8 @@ class Zappa:
         stage=None,
         route53=True,
         base_path=None,
+        use_apigateway=True,
+        use_function_url=False,
     ):
         """
         This updates your certificate information for an existing domain,
@@ -2558,19 +2829,23 @@ class Zappa:
             )
             certificate_arn = acm_certificate["CertificateArn"]
 
-        self.update_domain_base_path_mapping(domain_name, lambda_name, stage, base_path)
+        if use_apigateway:
+            self.update_domain_base_path_mapping(domain_name, lambda_name, stage, base_path)
 
-        return self.apigateway_client.update_domain_name(
-            domainName=domain_name,
-            patchOperations=[
-                {
-                    "op": "replace",
-                    "path": "/certificateName",
-                    "value": certificate_name,
-                },
-                {"op": "replace", "path": "/certificateArn", "value": certificate_arn},
-            ],
-        )
+            res = self.apigateway_client.update_domain_name(
+                domainName=domain_name,
+                patchOperations=[
+                    {
+                        "op": "replace",
+                        "path": "/certificateName",
+                        "value": certificate_name,
+                    },
+                    {"op": "replace", "path": "/certificateArn", "value": certificate_arn},
+                ],
+            )
+        if use_function_url:
+            pass
+        return res
 
     def update_domain_base_path_mapping(self, domain_name, lambda_name, stage, base_path):
         """
@@ -2728,6 +3003,8 @@ class Zappa:
             if policy_response["ResponseMetadata"]["HTTPStatusCode"] == 200:
                 statement = json.loads(policy_response["Policy"])["Statement"]
                 for s in statement:
+                    if s["Sid"] in ["FunctionURLAllowPublicAccess"]:
+                        continue
                     delete_response = self.lambda_client.remove_permission(FunctionName=lambda_name, StatementId=s["Sid"])
                     if delete_response["ResponseMetadata"]["HTTPStatusCode"] != 204:
                         logger.error("Failed to delete an obsolete policy statement: {}".format(policy_response))
