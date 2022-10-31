@@ -453,6 +453,8 @@ Zappa can be deployed to custom domain names and subdomains with custom SSL cert
 
 Currently, the easiest of these to use are the AWS Certificate Manager certificates, as they are free, self-renewing, and require the least amount of work.
 
+APIGateway and Lambda FunctionURL both support custom domains. FunctionURL is implemented via cloudfront distribution. Set `domain` for APIGateway and `function_url_domains` for FunctionURL.
+
 Once configured as described below, all of these methods use the same command:
 
     $ zappa certify
@@ -854,6 +856,7 @@ to change Zappa's behavior. Use these at your own risk!
 ```javascript
  {
     "dev": {
+        "additional_text_mimetypes": [], // allows you to provide additional mimetypes to be handled as text when binary_support is true.
         "alb_enabled": false, // enable provisioning of application load balancing resources. If set to true, you _must_ fill out the alb_vpc_config option as well.
         "alb_vpc_config": {
             "CertificateArn": "your_acm_certificate_arn", // ACM certificate ARN for ALB
@@ -868,6 +871,20 @@ to change Zappa's behavior. Use these at your own risk!
         "attach_policy": "my_attach_policy.json", // optional, IAM attach policy JSON file
         "apigateway_policy": "my_apigateway_policy.json", // optional, API Gateway resource policy JSON file
         "architecture": "x86_64", // optional, Set Lambda Architecture, defaults to x86_64. For Graviton 2 use: arm64
+        "function_url_enabled": false, // optional, set to true if you don't want to enable function URL. Default false.
+        "function_url_config": {
+            "authorizer": "NONE", // required if function url is enabled. default None. https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html
+            "cors": {
+              "allowedOrigins": [], // The origins that can access your function URL. default [*]
+              "allowedHeaders": [], // The HTTP headers that origins can include in requests to your function URL.
+              "allowedMethods": [], // The HTTP methods that are allowed when calling your function URL. For example: GET , POST , DELETE , or the wildcard character (* ). default [*]
+              "allowCredentials": false, //required, Whether to allow cookies or other credentials in requests to your function URL. default false.
+              "exposedResponseHeaders": [], The HTTP headers in your function response that you want to expose to origins that call your function URL.
+              "maxAge": 0 // The maximum amount of time, in seconds, that web browsers can cache results of a preflight request. default 0.
+            }
+        },
+        "function_url_cloudfront_config": {}, // see https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/cloudfront.html#CloudFront.Client.create_distribution
+        "function_url_custom_domains": [], // a list of custom domains.
         "async_source": "sns", // Source of async tasks. Defaults to "lambda"
         "async_resources": true, // Create the SNS topic and DynamoDB table to use. Defaults to true.
         "async_response_table": "your_dynamodb_table_name",  // the DynamoDB table name to use for captured async responses; defaults to None (can't capture)

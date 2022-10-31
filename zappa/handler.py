@@ -10,6 +10,8 @@ import sys
 import tarfile
 import traceback
 from builtins import str
+from types import ModuleType
+from typing import Tuple
 
 import boto3
 from werkzeug.wrappers import Response
@@ -18,11 +20,11 @@ from werkzeug.wrappers import Response
 # so handle both scenarios.
 try:
     from zappa.middleware import ZappaWSGIMiddleware
-    from zappa.utilities import merge_headers, parse_s3_url
+    from zappa.utilities import DEFAULT_TEXT_MIMETYPES, merge_headers, parse_s3_url
     from zappa.wsgi import common_log, create_wsgi_request
 except ImportError:  # pragma: no cover
     from .middleware import ZappaWSGIMiddleware
-    from .utilities import merge_headers, parse_s3_url
+    from .utilities import DEFAULT_TEXT_MIMETYPES, merge_headers, parse_s3_url
     from .wsgi import common_log, create_wsgi_request
 
 
@@ -266,6 +268,47 @@ class LambdaHandler:
         return exception_processed
 
     @staticmethod
+    def _process_response_body(response: Response, settings: ModuleType) -> Tuple[str, bool]:
+        """
+        Perform Response body encoding/decoding
+
+        Related: https://github.com/zappa/Zappa/issues/908
+        API Gateway requires binary data be base64 encoded:
+        https://aws.amazon.com/blogs/compute/handling-binary-data-using-amazon-api-gateway-http-apis/
+        When BINARY_SUPPORT is enabled the body is base64 encoded in the following cases:
+
+        - Content-Encoding defined, commonly used to specify compression (br/gzip/deflate/etc)
+          https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding
+          Content like this must be transmitted as b64.
+
+        - Response assumed binary when Response.mimetype does
+          not start with an entry defined in 'handle_as_text_mimetypes'
+        """
+        encode_body_as_base64 = False
+        if settings.BINARY_SUPPORT:
+            handle_as_text_mimetypes = DEFAULT_TEXT_MIMETYPES
+            additional_text_mimetypes = getattr(settings, "ADDITIONAL_TEXT_MIMETYPES", None)
+            if additional_text_mimetypes:
+                handle_as_text_mimetypes += tuple(additional_text_mimetypes)
+
+            if response.headers.get("Content-Encoding"):  # Assume br/gzip/deflate/etc encoding
+                encode_body_as_base64 = True
+
+            # werkzeug Response.mimetype: lowercase without parameters
+            # https://werkzeug.palletsprojects.com/en/2.2.x/wrappers/#werkzeug.wrappers.Request.mimetype
+            elif not response.mimetype.startswith(handle_as_text_mimetypes):
+                encode_body_as_base64 = True
+
+        if encode_body_as_base64:
+            body = base64.b64encode(response.data).decode("utf8")
+        else:
+            # response.data decoded by werkzeug
+            # https://werkzeug.palletsprojects.com/en/2.2.x/wrappers/#werkzeug.wrappers.Request.get_data
+            body = response.get_data(as_text=True)
+
+        return body, encode_body_as_base64
+
+    @staticmethod
     def run_function(app_function, event, context):
         """
         Given a function and event context,
@@ -480,6 +523,119 @@ class LambdaHandler:
                 logger.error("Cannot find a function to process the triggered event.")
             return result
 
+        # This is an HTTP-protocol API Gateway event or Lambda url event with payload format version 2.0
+        elif "version" in event and event["version"] == "2.0":
+            try:
+                time_start = datetime.datetime.now()
+
+                script_name = ""
+                host = event.get("headers", {}).get("host")
+                if host:
+                    if "amazonaws.com" in host:
+                        logger.debug("amazonaws found in host")
+                        # The path provided in th event doesn't include the
+                        # stage, so we must tell Flask to include the API
+                        # stage in the url it calculates. See https://github.com/Miserlou/Zappa/issues/1014
+                        script_name = f"/{settings.API_STAGE}"
+                else:
+                    # This is a test request sent from the AWS console
+                    if settings.DOMAIN:
+                        # Assume the requests received will be on the specified
+                        # domain. No special handling is required
+                        pass
+                    else:
+                        # Assume the requests received will be to the
+                        # amazonaws.com endpoint, so tell Flask to include the
+                        # API stage
+                        script_name = f"/{settings.API_STAGE}"
+
+                base_path = getattr(settings, "BASE_PATH", None)
+                environ = create_wsgi_request(
+                    event,
+                    script_name=script_name,
+                    base_path=base_path,
+                    trailing_slash=self.trailing_slash,
+                    binary_support=settings.BINARY_SUPPORT,
+                    context_header_mappings=settings.CONTEXT_HEADER_MAPPINGS,
+                    event_version="2.0",
+                )
+
+                # We are always on https on Lambda, so tell our wsgi app that.
+                environ["HTTPS"] = "on"
+                environ["wsgi.url_scheme"] = "https"
+                environ["lambda.context"] = context
+                environ["lambda.event"] = event
+
+                # Execute the application
+                with Response.from_app(self.wsgi_app, environ) as response:
+                    response_body = None
+                    response_is_base_64_encoded = False
+                    if response.data:
+                        response_body, response_is_base_64_encoded = self._process_response_body(response, settings=settings)
+
+                    response_status_code = response.status_code
+
+                    cookies = []
+                    response_headers = {}
+                    for key, value in response.headers:
+                        if key.lower() == "set-cookie":
+                            cookies.append(value)
+                        else:
+                            if key in response_headers:
+                                updated_value = f"{response_headers[key]},{value}"
+                                response_headers[key] = updated_value
+                            else:
+                                response_headers[key] = value
+
+                    # Calculate the total response time,
+                    # and log it in the Common Log format.
+                    time_end = datetime.datetime.now()
+                    delta = time_end - time_start
+                    response_time_ms = delta.total_seconds() * 1000
+                    response.content = response.data
+                    common_log(environ, response, response_time=response_time_ms)
+
+                    return {
+                        "cookies": cookies,
+                        "isBase64Encoded": response_is_base_64_encoded,
+                        "statusCode": response_status_code,
+                        "headers": response_headers,
+                        "body": response_body,
+                    }
+            except Exception as e:
+                # Print statements are visible in the logs either way
+                print(e)
+                exc_info = sys.exc_info()
+                message = (
+                    "An uncaught exception happened while servicing this request. "
+                    "You can investigate this with the `zappa tail` command."
+                )
+
+                # If we didn't even build an app_module, just raise.
+                if not settings.DJANGO_SETTINGS:
+                    try:
+                        self.app_module
+                    except NameError as ne:
+                        message = "Failed to import module: {}".format(ne.message)
+
+                # Call exception handler for unhandled exceptions
+                exception_handler = self.settings.EXCEPTION_HANDLER
+                self._process_exception(
+                    exception_handler=exception_handler,
+                    event=event,
+                    context=context,
+                    exception=e,
+                )
+
+                # Return this unspecified exception as a 500, using template that API Gateway expects.
+                content = collections.OrderedDict()
+                content["statusCode"] = 500
+                body = {"message": message}
+                if settings.DEBUG:  # only include traceback if debug is on.
+                    body["traceback"] = traceback.format_exception(*exc_info)  # traceback as a list for readability.
+                content["body"] = json.dumps(str(body), sort_keys=True, indent=4)
+                return content
+
         # Normal web app flow
         try:
             # Timing
@@ -557,24 +713,10 @@ class LambdaHandler:
                         zappa_returndict.setdefault("statusDescription", response.status)
 
                     if response.data:
-                        if settings.BINARY_SUPPORT and response.headers.get(
-                            "Content-Encoding"
-                        ):
-                            # We could have a text response that's gzip
-                            # encoded. Therefore, we base-64 encode it.
-                            zappa_returndict["body"] = base64.b64encode(
-                                response.data
-                            ).decode("utf-8")
-                            zappa_returndict["isBase64Encoded"] = True
-                        elif (
-                            settings.BINARY_SUPPORT
-                            and not response.mimetype.startswith("text/")
-                            and response.mimetype != "application/json"
-                        ):
-                            zappa_returndict["body"] = base64.b64encode(response.data).decode("utf-8")
-                            zappa_returndict["isBase64Encoded"] = True
-                        else:
-                            zappa_returndict["body"] = response.get_data(as_text=True)
+                        processed_body, is_base64_encoded = self._process_response_body(response, settings=settings)
+                        zappa_returndict["body"] = processed_body
+                        if is_base64_encoded:
+                            zappa_returndict["isBase64Encoded"] = is_base64_encoded
 
                     zappa_returndict["statusCode"] = response.status_code
                     if "headers" in event:

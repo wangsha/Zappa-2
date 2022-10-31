@@ -67,6 +67,7 @@ CUSTOM_SETTINGS = [
 
 BOTO3_CONFIG_DOCS_URL = "https://boto3.readthedocs.io/en/latest/guide/quickstart.html#configuration"
 
+
 ##
 # Main Input Processing
 ##
@@ -118,6 +119,7 @@ class ZappaCLI:
     xray_tracing = False
     aws_kms_key_arn = ""
     context_header_mappings = None
+    additional_text_mimetypes = None
     tags = []
     layers = None
     architecture = None
@@ -853,6 +855,13 @@ class ZappaCLI:
             )
             self.zappa.deploy_lambda_alb(**kwargs)
 
+        if self.use_function_url:
+            kwargs = dict(
+                function_name=self.lambda_arn,
+                function_url_config=self.function_url_config,
+            )
+            self.zappa.deploy_lambda_function_url(**kwargs)
+
         if self.use_apigateway:
 
             # Create and configure the API Gateway
@@ -1116,6 +1125,15 @@ class ZappaCLI:
         else:
             endpoint_url = None
 
+        if self.use_function_url:
+            kwargs = dict(
+                function_name=self.lambda_arn,
+                function_url_config=self.function_url_config,
+            )
+            self.zappa.update_lambda_function_url(**kwargs)
+        else:
+            self.zappa.delete_lambda_function_url(self.lambda_arn)
+
         self.schedule()
 
         # Update any cognito pool with the lambda arn
@@ -1215,6 +1233,9 @@ class ZappaCLI:
 
         if self.use_alb:
             self.zappa.undeploy_lambda_alb(self.lambda_name)
+
+        if self.function_url_domains:
+            self.zappa.undeploy_function_url_custom_domain(self.lambda_name)
 
         if self.use_apigateway:
             if remove_logs:
@@ -1967,7 +1988,7 @@ class ZappaCLI:
         Register or update a domain certificate for this env.
         """
 
-        if not self.domain:
+        if not (self.domain or self.function_url_domains):
             raise ClickException(
                 "Can't certify a domain without " + click.style("domain", fg="red", bold=True) + " configured!"
             )
@@ -2048,59 +2069,73 @@ class ZappaCLI:
                 certificate_chain = f.read()
 
         click.echo("Certifying domain " + click.style(self.domain, fg="green", bold=True) + "..")
+        route53 = self.stage_config.get("route53_enabled", True)
 
-        # Get cert and update domain.
+        # Get cert and update domain for api_gateway
+        if self.use_apigateway:
+            # Let's Encrypt
+            if not cert_location and not cert_arn:
+                from .letsencrypt import get_cert_and_update_domain
 
-        # Let's Encrypt
-        if not cert_location and not cert_arn:
-            from .letsencrypt import get_cert_and_update_domain
+                cert_success = get_cert_and_update_domain(self.zappa, self.lambda_name, self.api_stage, self.domain, manual)
 
-            cert_success = get_cert_and_update_domain(self.zappa, self.lambda_name, self.api_stage, self.domain, manual)
-
-        # Custom SSL / ACM
-        else:
-            route53 = self.stage_config.get("route53_enabled", True)
-            if not self.zappa.get_domain_name(self.domain, route53=route53):
-                dns_name = self.zappa.create_domain_name(
-                    domain_name=self.domain,
-                    certificate_name=self.domain + "-Zappa-Cert",
-                    certificate_body=certificate_body,
-                    certificate_private_key=certificate_private_key,
-                    certificate_chain=certificate_chain,
-                    certificate_arn=cert_arn,
-                    lambda_name=self.lambda_name,
-                    stage=self.api_stage,
-                    base_path=base_path,
-                )
-                if route53:
-                    self.zappa.update_route53_records(self.domain, dns_name)
-                print(
-                    "Created a new domain name with supplied certificate. "
-                    "Please note that it can take up to 40 minutes for this domain to be "
-                    "created and propagated through AWS, but it requires no further work on your part."
-                )
+            # Custom SSL / ACM
             else:
-                self.zappa.update_domain_name(
-                    domain_name=self.domain,
-                    certificate_name=self.domain + "-Zappa-Cert",
-                    certificate_body=certificate_body,
-                    certificate_private_key=certificate_private_key,
-                    certificate_chain=certificate_chain,
-                    certificate_arn=cert_arn,
-                    lambda_name=self.lambda_name,
-                    stage=self.api_stage,
-                    route53=route53,
-                    base_path=base_path,
-                )
 
-            cert_success = True
+                if not self.zappa.get_domain_name(self.domain, route53=route53):
+                    dns_name = self.zappa.create_domain_name(
+                        domain_name=self.domain,
+                        certificate_name=self.domain + "-Zappa-Cert",
+                        certificate_body=certificate_body,
+                        certificate_private_key=certificate_private_key,
+                        certificate_chain=certificate_chain,
+                        certificate_arn=cert_arn,
+                        lambda_name=self.lambda_name,
+                        stage=self.api_stage,
+                        base_path=base_path,
+                    )
+                    if route53:
+                        self.zappa.update_route53_records(self.domain, dns_name)
+                    print(
+                        "Created a new domain name with supplied certificate. "
+                        "Please note that it can take up to 40 minutes for this domain to be "
+                        "created and propagated through AWS, but it requires no further work on your part."
+                    )
+                else:
+                    self.zappa.update_domain_name(
+                        domain_name=self.domain,
+                        certificate_name=self.domain + "-Zappa-Cert",
+                        certificate_body=certificate_body,
+                        certificate_private_key=certificate_private_key,
+                        certificate_chain=certificate_chain,
+                        certificate_arn=cert_arn,
+                        lambda_name=self.lambda_name,
+                        stage=self.api_stage,
+                        route53=route53,
+                        base_path=base_path,
+                    )
 
-        if cert_success:
-            click.echo("Certificate " + click.style("updated", fg="green", bold=True) + "!")
-        else:
-            click.echo(click.style("Failed", fg="red", bold=True) + " to generate or install certificate! :(")
-            click.echo("\n==============\n")
-            shamelessly_promote()
+                cert_success = True
+                if cert_success:
+                    click.echo("Certificate " + click.style("updated", fg="green", bold=True) + "!")
+                else:
+                    click.echo(click.style("Failed", fg="red", bold=True) + " to generate or install certificate! :(")
+                    click.echo("\n==============\n")
+                    shamelessly_promote()
+
+        if self.use_function_url:
+            self.lambda_arn = self.zappa.get_lambda_function(function_name=self.lambda_name)
+            dns_name = self.zappa.update_lambda_function_url_domains(
+                self.lambda_arn, self.function_url_domains, cert_arn, self.function_url_cloudfront_config
+            )
+            if route53:
+                for domain in self.function_url_domains:
+                    self.zappa.update_route53_records(domain, dns_name)
+            print(
+                "Created a new domain name with supplied certificate. "
+                "Please note that it can take up to 40 minutes for this domain to be "
+                "created and propagated through AWS, but it requires no further work on your part."
+            )
 
     ##
     # Shell
@@ -2301,10 +2336,33 @@ class ZappaCLI:
         self.xray_tracing = self.stage_config.get("xray_tracing", False)
         self.desired_role_arn = self.stage_config.get("role_arn")
         self.layers = self.stage_config.get("layers", None)
+        self.additional_text_mimetypes = self.stage_config.get("additional_text_mimetypes", None)
+
+        # check that BINARY_SUPPORT is True if additional_text_mimetypes is provided
+        if self.additional_text_mimetypes and not self.binary_support:
+            raise ClickException("zappa_settings.json has additional_text_mimetypes defined, but binary_support is False!")
 
         # Load ALB-related settings
         self.use_alb = self.stage_config.get("alb_enabled", False)
         self.alb_vpc_config = self.stage_config.get("alb_vpc_config", {})
+
+        # function URL settings
+        self.use_function_url = self.stage_config.get("function_url_enabled", True)
+        self.function_url_domains = self.stage_config.get("function_url_domains", [])
+        self.function_url_cloudfront_config = self.stage_config.get("function_url_cloudfront_config", {})
+        default_function_url_config = {
+            "authorizer": "NONE",
+            "cors": {
+                "allowedOrigins": ["*"],
+                "allowedHeaders": ["*"],
+                "allowedMethods": ["*"],
+                "allowCredentials": False,
+                "exposedResponseHeaders": ["*"],
+                "maxAge": 0,
+            },
+        }
+        default_function_url_config.update(self.stage_config.get("function_url_config", {}))
+        self.function_url_config = default_function_url_config
 
         # Additional tags
         self.tags = self.stage_config.get("tags", {})
@@ -2637,6 +2695,10 @@ class ZappaCLI:
         # async response
         async_response_table = self.stage_config.get("async_response_table", "")
         settings_s += "ASYNC_RESPONSE_TABLE='{0!s}'\n".format(async_response_table)
+
+        # additional_text_mimetypes
+        additional_text_mimetypes = self.stage_config.get("additional_text_mimetypes", [])
+        settings_s += f"ADDITIONAL_TEXT_MIMETYPES={additional_text_mimetypes}\n"
         return settings_s
 
     def remove_local_zip(self):

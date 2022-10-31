@@ -26,9 +26,7 @@ from packaging import version
 
 from zappa.cli import ZappaCLI, disable_click_colors, shamelessly_promote
 from zappa.core import ALB_LAMBDA_ALIAS, ASSUME_POLICY, ATTACH_POLICY, Zappa
-from zappa.ext.django_zappa import get_django_wsgi
 from zappa.letsencrypt import (
-    cleanup,
     create_chained_certificate,
     create_domain_csr,
     create_domain_key,
@@ -39,21 +37,6 @@ from zappa.letsencrypt import (
     parse_csr,
     register_account,
     sign_certificate,
-    verify_challenge,
-)
-from zappa.utilities import (
-    InvalidAwsLambdaName,
-    conflicts_with_a_neighbouring_module,
-    contains_python_files_or_subdirs,
-    detect_django_settings,
-    detect_flask_apps,
-    get_venv_from_python_version,
-    human_size,
-    is_valid_bucket_name,
-    parse_s3_url,
-    string_to_timestamp,
-    titlecase_keys,
-    validate_name,
 )
 from zappa.wsgi import common_log, create_wsgi_request
 
@@ -100,61 +83,6 @@ class TestZappa(unittest.TestCase):
     def test_disable_click_colors(self):
         disable_click_colors()
         assert resolve_color_default() is False
-
-    @mock.patch("zappa.core.find_packages")
-    @mock.patch("os.remove")
-    def test_copy_editable_packages(self, mock_remove, mock_find_packages):
-        virtual_env = os.environ.get("VIRTUAL_ENV")
-        if not virtual_env:
-            return self.skipTest("test_copy_editable_packages must be run in a virtualenv")
-
-        temp_package_dir = tempfile.mkdtemp()
-        try:
-            egg_links = [
-                os.path.join(
-                    virtual_env,
-                    "lib",
-                    get_venv_from_python_version(),
-                    "site-packages",
-                    "test-copy-editable-packages.egg-link",
-                )
-            ]
-            egg_path = "/some/other/directory/package"
-            mock_find_packages.return_value = [
-                "package",
-                "package.subpackage",
-                "package.another",
-            ]
-            temp_egg_link = os.path.join(temp_package_dir, "package-python.egg-link")
-
-            z = Zappa()
-            mock_open = mock.mock_open(read_data=egg_path.encode("utf-8"))
-            with mock.patch("zappa.core.open", mock_open), mock.patch("glob.glob") as mock_glob, mock.patch(
-                "zappa.core.copytree"
-            ) as mock_copytree:
-                # we use glob.glob to get the egg-links in the temp packages
-                # directory
-                mock_glob.return_value = [temp_egg_link]
-
-                z.copy_editable_packages(egg_links, temp_package_dir)
-
-                # make sure we copied the right directories
-                mock_copytree.assert_called_with(
-                    os.path.join(egg_path, "package"),
-                    os.path.join(temp_package_dir, "package"),
-                    metadata=False,
-                    symlinks=False,
-                )
-                self.assertEqual(mock_copytree.call_count, 1)
-
-                # make sure it removes the egg-link from the temp packages
-                # directory
-                mock_remove.assert_called_with(temp_egg_link)
-                self.assertEqual(mock_remove.call_count, 1)
-        finally:
-            shutil.rmtree(temp_package_dir)
-
-        return
 
     def test_create_lambda_package(self):
         # mock the pkg_resources.WorkingSet() to include a known package in lambda_packages so that the code
@@ -1158,6 +1086,158 @@ class TestZappa(unittest.TestCase):
         response_tuple = collections.namedtuple("Response", ["status_code", "content"])
         response = response_tuple(200, "hello")
 
+    def test_wsgi_from_v2_event(self):
+        event = {
+            "version": "2.0",
+            "routeKey": "ANY /{proxy+}",
+            "rawPath": "/",
+            "rawQueryString": "",
+            "headers": {
+                "accept": "*/*",
+                "accept-encoding": "gzip, deflate, br",
+                "accept-language": "en-US,en;q=0.9",
+                "cache-control": "no-cache",
+                "content-length": "0",
+                "dnt": "1",
+                "host": "qw8klxioji.execute-api.eu-west-1.amazonaws.com",
+                "pragma": "no-cache",
+                "upgrade-insecure-requests": "1",
+                "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36",
+                "x-forwarded-for": "50.191.225.98",
+                "x-forwarded-port": "443",
+                "x-forwarded-proto": "https",
+            },
+            "requestContext": {
+                "accountId": "724336686645",
+                "apiId": "qw8klxioji",
+                "domainName": "qw8klxioji.execute-api.eu-west-1.amazonaws.com",
+                "domainPrefix": "qw8klxioji",
+                "http": {
+                    "method": "GET",
+                    "path": "/",
+                    "protocol": "HTTP/1.1",
+                    "sourceIp": "50.191.225.98",
+                    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36",
+                },
+                "requestId": "xTG4wqXdSQ0RHpA=",
+                "routeKey": "ANY /{proxy+}",
+                "stage": "$default",
+                "time": "16/Oct/2022:11:17:12 +0000",
+                "timeEpoch": 1665919032135,
+            },
+            "pathParameters": {"proxy": ""},
+            "isBase64Encoded": False,
+        }
+        environ = create_wsgi_request(event, event_version="2.0")
+        self.assertTrue(environ)
+
+    def test_wsgi_from_v2_event_with_lambda_authorizer(self):
+        principal_id = "user|a1b2c3d4"
+        authorizer = {"lambda": {"bool": True, "key": "value", "number": 1, "principalId": principal_id}}
+        event = {
+            "version": "2.0",
+            "routeKey": "ANY /{proxy+}",
+            "rawPath": "/",
+            "rawQueryString": "",
+            "headers": {
+                "accept": "*/*",
+                "accept-encoding": "gzip, deflate, br",
+                "authorization": "Bearer 1232314343",
+                "content-length": "28",
+                "content-type": "application/json",
+                "host": "qw8klxioji.execute-api.eu-west-1.amazonaws.com",
+                "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36",
+                "x-forwarded-for": "50.191.225.98",
+                "x-forwarded-port": "443",
+                "x-forwarded-proto": "https",
+            },
+            "requestContext": {
+                "accountId": "724336686645",
+                "apiId": "qw8klxioji",
+                "authorizer": authorizer,
+                "domainName": "qw8klxioji.execute-api.eu-west-1.amazonaws.com",
+                "domainPrefix": "qw8klxioji",
+                "http": {
+                    "method": "POST",
+                    "path": "/",
+                    "protocol": "HTTP/1.1",
+                    "sourceIp": "50.191.225.98",
+                    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36",
+                },
+                "requestId": "aJ6Rqi93zQ0GPng=",
+                "routeKey": "ANY /{proxy+}",
+                "stage": "$default",
+                "time": "17/Oct/2022:14:58:44 +0000",
+                "timeEpoch": 1666018724000,
+            },
+            "pathParameters": {"proxy": ""},
+            "body": "{'data':'0123456789'}",
+            "isBase64Encoded": False,
+        }
+        environ = create_wsgi_request(event, event_version="2.0")
+        self.assertEqual(environ["API_GATEWAY_AUTHORIZER"], authorizer)
+        self.assertEqual(environ["REMOTE_USER"], principal_id)
+
+    def test_wsgi_from_v2_event_with_iam_authorizer(self):
+        user_arn = "arn:aws:sts::724336686645:assumed-role/SAMLUSER/user.name"
+        authorizer = {
+            "iam": {
+                "accessKey": "AWSACCESSKEYID",
+                "accountId": "724336686645",
+                "callerId": "KFDJSURSUC8FU3ITCWEDJ:user.name",
+                "cognitoIdentity": None,
+                "principalOrgId": "aws:PrincipalOrgID",
+                "userArn": user_arn,
+                "userId": "KFDJSURSUC8FU3ITCWEDJ:user.name",
+            }
+        }
+        event = {
+            "version": "2.0",
+            "routeKey": "ANY /{proxy+}",
+            "rawPath": "/",
+            "rawQueryString": "",
+            "headers": {
+                "accept": "*/*",
+                "accept-encoding": "gzip, deflate",
+                "authorization": "AWS4-HMAC-SHA256 Credential=AWSACCESSKEYID/20221017/eu-west-1/execute-api/aws4_request, SignedHeaders=host;x-amz-date;x-amz-security-token, Signature=foosignature",
+                "content-length": "17",
+                "content-type": "application/json",
+                "host": "qw8klxioji.execute-api.eu-west-1.amazonaws.com",
+                "user-agent": "python-requests/2.28.1",
+                "x-amz-content-sha256": "foobar",
+                "x-amz-date": "20221017T150616Z",
+                "x-amz-security-token": "footoken",
+                "x-forwarded-for": "50.191.225.98",
+                "x-forwarded-port": "443",
+                "x-forwarded-proto": "https",
+            },
+            "requestContext": {
+                "accountId": "724336686645",
+                "apiId": "qw8klxioji",
+                "authorizer": authorizer,
+                "domainName": "qw8klxioji.execute-api.eu-west-1.amazonaws.com",
+                "domainPrefix": "qw8klxioji",
+                "http": {
+                    "method": "POST",
+                    "path": "/",
+                    "protocol": "HTTP/1.1",
+                    "sourceIp": "50.191.225.98",
+                    "userAgent": "python-requests/2.28.1",
+                },
+                "requestId": "aJ5ZZgeYiQ0Rz-A=",
+                "routeKey": "ANY /{proxy+}",
+                "stage": "$default",
+                "time": "17/Oct/2022:15:06:16 +0000",
+                "timeEpoch": 1666019176656,
+            },
+            "pathParameters": {"proxy": ""},
+            "body": "{'data': '12345'}",
+            "isBase64Encoded": False,
+        }
+        environ = create_wsgi_request(event, event_version="2.0")
+        self.assertEqual(environ["API_GATEWAY_AUTHORIZER"], authorizer)
+        self.assertEqual(environ["REMOTE_USER"], user_arn)
+
     ##
     # Handler
     ##
@@ -1207,6 +1287,12 @@ class TestZappa(unittest.TestCase):
         zappa_cli.load_settings("test_settings.json")
         self.assertEqual(6, zappa_cli.stage_config["lambda_concurrency"])
 
+    def test_load_settings__function_url_enabled(self):
+        zappa_cli = ZappaCLI()
+        zappa_cli.api_stage = "function_url_enabled"
+        zappa_cli.load_settings("test_settings.json")
+        self.assertEqual(True, zappa_cli.stage_config["function_url_enabled"])
+
     def test_load_settings_yml(self):
         zappa_cli = ZappaCLI()
         zappa_cli.api_stage = "ttt888"
@@ -1236,6 +1322,20 @@ class TestZappa(unittest.TestCase):
         zappa_cli.api_stage = "ttt888"
         zappa_cli.load_settings("tests/test_settings.toml")
         self.assertEqual(False, zappa_cli.stage_config["touch"])
+
+    def test_load_settings_bad_additional_text_mimetypes(self):
+        zappa_cli = ZappaCLI()
+        zappa_cli.api_stage = "nobinarysupport"
+        with self.assertRaises(ClickException):
+            zappa_cli.load_settings("tests/test_bad_additional_text_mimetypes_settings.json")
+
+    def test_load_settings_additional_text_mimetypes(self):
+        zappa_cli = ZappaCLI()
+        zappa_cli.api_stage = "addtextmimetypes"
+        zappa_cli.load_settings("test_settings.json")
+        expected_additional_text_mimetypes = ["application/custommimetype"]
+        self.assertEqual(expected_additional_text_mimetypes, zappa_cli.stage_config["additional_text_mimetypes"])
+        self.assertEqual(True, zappa_cli.stage_config["binary_support"])
 
     def test_settings_extension(self):
         """
@@ -2028,119 +2128,6 @@ class TestZappa(unittest.TestCase):
         )
         self.assertListEqual(zones["HostedZones"], [{"Id": "zone1"}, {"Id": "zone2"}])
 
-    ##
-    # Django
-    ##
-
-    def test_detect_dj(self):
-        # Sanity
-        settings_modules = detect_django_settings()
-
-    def test_dj_wsgi(self):
-        # Sanity
-        settings_modules = detect_django_settings()
-
-        settings = """
-# Build paths inside the project like this: os.path.join(BASE_DIR, ...)
-import os
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/1.7/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'alskdfjalsdkf=0*%do-ayvy*m2k=vss*$7)j8q!@u0+d^na7mi2(^!l!d'
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-TEMPLATE_DEBUG = True
-
-ALLOWED_HOSTS = []
-
-# Application definition
-
-INSTALLED_APPS = (
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-)
-
-MIDDLEWARE_CLASSES = (
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.auth.middleware.SessionAuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
-)
-
-ROOT_URLCONF = 'blah.urls'
-WSGI_APPLICATION = 'hackathon_starter.wsgi.application'
-
-# Database
-# https://docs.djangoproject.com/en/1.7/ref/settings/#databases
-
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
-    }
-}
-
-# Internationalization
-# https://docs.djangoproject.com/en/1.7/topics/i18n/
-
-LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
-USE_I18N = True
-USE_L10N = True
-USE_TZ = True
-        """
-
-        djts = open("dj_test_settings.py", "w")
-        djts.write(settings)
-        djts.close()
-
-        app = get_django_wsgi("dj_test_settings")
-        try:
-            os.remove("dj_test_settings.py")
-            os.remove("dj_test_settings.pyc")
-        except Exception as e:
-            pass
-
-    ##
-    # Util / Misc
-    ##
-
-    def test_human_units(self):
-        human_size(1)
-        human_size(9999999999999)
-
-    def test_string_to_timestamp(self):
-        boo = string_to_timestamp("asdf")
-        self.assertTrue(boo == 0)
-
-        yay = string_to_timestamp("1h")
-        self.assertTrue(type(yay) == int)
-        self.assertTrue(yay > 0)
-
-        yay = string_to_timestamp("4m")
-        self.assertTrue(type(yay) == int)
-        self.assertTrue(yay > 0)
-
-        yay = string_to_timestamp("1mm")
-        self.assertTrue(type(yay) == int)
-        self.assertTrue(yay > 0)
-
-        yay = string_to_timestamp("1mm1w1d1h1m1s1ms1us")
-        self.assertTrue(type(yay) == int)
-        self.assertTrue(yay > 0)
-
     def test_event_name(self):
         zappa = Zappa()
         truncated = zappa.get_event_name(
@@ -2234,41 +2221,8 @@ USE_TZ = True
             f"{hashed_lambda_name}-{index}-{event['name']}-{function}",
         )
 
-    def test_detect_dj(self):
-        # Sanity
-        settings_modules = detect_django_settings()
-
-    def test_detect_flask(self):
-        # Sanity
-        settings_modules = detect_flask_apps()
-
     def test_shameless(self):
         shamelessly_promote()
-
-    def test_s3_url_parser(self):
-        remote_bucket, remote_file = parse_s3_url("s3://my-project-config-files/filename.json")
-        self.assertEqual(remote_bucket, "my-project-config-files")
-        self.assertEqual(remote_file, "filename.json")
-
-        remote_bucket, remote_file = parse_s3_url("s3://your-bucket/account.key")
-        self.assertEqual(remote_bucket, "your-bucket")
-        self.assertEqual(remote_file, "account.key")
-
-        remote_bucket, remote_file = parse_s3_url("s3://my-config-bucket/super-secret-config.json")
-        self.assertEqual(remote_bucket, "my-config-bucket")
-        self.assertEqual(remote_file, "super-secret-config.json")
-
-        remote_bucket, remote_file = parse_s3_url("s3://your-secure-bucket/account.key")
-        self.assertEqual(remote_bucket, "your-secure-bucket")
-        self.assertEqual(remote_file, "account.key")
-
-        remote_bucket, remote_file = parse_s3_url("s3://your-bucket/subfolder/account.key")
-        self.assertEqual(remote_bucket, "your-bucket")
-        self.assertEqual(remote_file, "subfolder/account.key")
-
-        # Sad path
-        remote_bucket, remote_file = parse_s3_url("/dev/null")
-        self.assertEqual(remote_bucket, "")
 
     def test_remote_env_package(self):
         zappa_cli = ZappaCLI()
@@ -2395,28 +2349,6 @@ USE_TZ = True
 
         zappa_cli.remove_local_zip()
 
-    def test_validate_name(self):
-        fname = "tests/name_scenarios.json"
-        with open(fname, "r") as f:
-            scenarios = json.load(f)
-        for scenario in scenarios:
-            value = scenario["value"]
-            is_valid = scenario["is_valid"]
-            if is_valid:
-                assert validate_name(value)
-            else:
-                with self.assertRaises(InvalidAwsLambdaName) as exc:
-                    validate_name(value)
-
-    def test_contains_python_files_or_subdirs(self):
-        self.assertTrue(contains_python_files_or_subdirs("tests/data"))
-        self.assertTrue(contains_python_files_or_subdirs("tests/data/test2"))
-        self.assertFalse(contains_python_files_or_subdirs("tests/data/test1"))
-
-    def test_conflicts_with_a_neighbouring_module(self):
-        self.assertTrue(conflicts_with_a_neighbouring_module("tests/data/test1"))
-        self.assertFalse(conflicts_with_a_neighbouring_module("tests/data/test2"))
-
     def test_settings_py_generation(self):
         zappa_cli = ZappaCLI()
         zappa_cli.api_stage = "ttt888"
@@ -2448,55 +2380,6 @@ USE_TZ = True
         with self.assertRaises(ValueError) as context:
             zappa_cli.create_package()
         self.assertEqual("Environment variable keys must be ascii.", str(context.exception))
-
-    def test_titlecase_keys(self):
-        raw = {
-            "hOSt": "github.com",
-            "ConnECtiOn": "keep-alive",
-            "UpGRAde-InSecuRE-ReQueSts": "1",
-            "uSer-AGEnT": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.181 Safari/537.36",
-            "cONtENt-TYPe": "text/html; charset=utf-8",
-            "aCCEpT": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-            "ACcePT-encoDInG": "gzip, deflate, br",
-            "AcCEpT-lAnGUagE": "en-US,en;q=0.9",
-        }
-        transformed = titlecase_keys(raw)
-        expected = {
-            "Host": "github.com",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.181 Safari/537.36",
-            "Content-Type": "text/html; charset=utf-8",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        self.assertEqual(expected, transformed)
-
-    def test_is_valid_bucket_name(self):
-        # Bucket names must be at least 3 and no more than 63 characters long.
-        self.assertFalse(is_valid_bucket_name("ab"))
-        self.assertFalse(is_valid_bucket_name("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefhijlmn"))
-        # Bucket names must not contain uppercase characters or underscores.
-        self.assertFalse(is_valid_bucket_name("aaaBaaa"))
-        self.assertFalse(is_valid_bucket_name("aaa_aaa"))
-        # Bucket names must start with a lowercase letter or number.
-        self.assertFalse(is_valid_bucket_name(".abbbaba"))
-        self.assertFalse(is_valid_bucket_name("abbaba."))
-        self.assertFalse(is_valid_bucket_name("-abbaba"))
-        self.assertFalse(is_valid_bucket_name("ababab-"))
-        # Bucket names must be a series of one or more labels. Adjacent labels are separated by a single period (.).
-        # Each label must start and end with a lowercase letter or a number.
-        self.assertFalse(is_valid_bucket_name("aaa..bbbb"))
-        self.assertFalse(is_valid_bucket_name("aaa.-bbb.ccc"))
-        self.assertFalse(is_valid_bucket_name("aaa-.bbb.ccc"))
-        # Bucket names must not be formatted as an IP address (for example, 192.168.5.4).
-        self.assertFalse(is_valid_bucket_name("192.168.5.4"))
-        self.assertFalse(is_valid_bucket_name("127.0.0.1"))
-        self.assertFalse(is_valid_bucket_name("255.255.255.255"))
-
-        self.assertTrue(is_valid_bucket_name("valid-formed-s3-bucket-name"))
-        self.assertTrue(is_valid_bucket_name("worst.bucket.ever"))
 
     # TODO: encountered error when vpc_config["SubnetIds"] or vpc_config["SecurityGroupIds"] is missing
     # We need to make the code more robust in this case and avoid the KeyError
@@ -2827,6 +2710,507 @@ USE_TZ = True
         boto_mock.client().delete_function_concurrency.assert_called_with(
             FunctionName="abc",
         )
+
+    @mock.patch("botocore.client")
+    def test_deploy_lambda_function_url(self, client):
+        boto_mock = mock.MagicMock()
+        zappa_core = Zappa(
+            boto_session=boto_mock,
+            profile_name="test",
+            aws_region="test",
+            load_credentials=True,
+        )
+        function_name = "abc"
+        function_url_config = {
+            "authorizer": "NONE",
+            "cors": {
+                "allowedOrigins": ["*"],
+                "allowedHeaders": ["*"],
+                "allowedMethods": ["*"],
+                "allowCredentials": False,
+                "exposedResponseHeaders": ["*"],
+                "maxAge": 0,
+            },
+        }
+        zappa_core.lambda_client.create_function_url_config.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 201,
+                "RetryAttempts": 0,
+            },
+            "FunctionUrl": "https://xxxxx.lambda-url.ap-southeast-1.on.aws/",
+            "FunctionArn": "arn:aws:lambda:ap-southeast-1:123456789:function:{}".format(function_name),
+        }
+        zappa_core.lambda_client.add_permission.return_value = {
+            "ResponseMetadata": {
+                "RequestId": "cbe73d4e-007e-4476-a4a0-fbd07599570a",
+                "HTTPStatusCode": 201,
+                "RetryAttempts": 0,
+            },
+            "Statement": '{"Sid":"FunctionURLAllowPublicAccess","Effect":"Allow","Principal":"*","Action":"lambda:InvokeFunctionUrl","Resource":"arn:aws:lambda:ap-southeast-1:123456789:function:abc"}, "Condition":{"StringEquals":{"lambda: FunctionUrlAuthType":"NONE"}}',
+        }
+
+        zappa_core.deploy_lambda_function_url(function_name="abc", function_url_config=function_url_config)
+        boto_mock.client().create_function_url_config.assert_called_with(
+            FunctionName=function_name,
+            AuthType=function_url_config["authorizer"],
+            Cors={
+                "AllowCredentials": function_url_config["cors"]["allowCredentials"],
+                "AllowHeaders": function_url_config["cors"]["allowedHeaders"],
+                "AllowMethods": function_url_config["cors"]["allowedMethods"],
+                "AllowOrigins": function_url_config["cors"]["allowedOrigins"],
+                "ExposeHeaders": function_url_config["cors"]["exposedResponseHeaders"],
+                "MaxAge": function_url_config["cors"]["maxAge"],
+            },
+        )
+
+        boto_mock.client().add_permission.assert_called_with(
+            FunctionName=function_name,
+            StatementId="FunctionURLAllowPublicAccess",
+            Action="lambda:InvokeFunctionUrl",
+            Principal="*",
+            FunctionUrlAuthType=function_url_config["authorizer"],
+        )
+
+    @mock.patch("botocore.client")
+    def test_update_lambda_function_url(self, client):
+        boto_mock = mock.MagicMock()
+        zappa_core = Zappa(
+            boto_session=boto_mock,
+            profile_name="test",
+            aws_region="test",
+            load_credentials=True,
+        )
+        function_name = "abc"
+        function_arn = "arn:aws:lambda:ap-southeast-1:123456789:function:{}".format(function_name)
+        function_url_config = {
+            "authorizer": "NONE",
+            "cors": {
+                "allowedOrigins": ["*"],
+                "allowedHeaders": ["*"],
+                "allowedMethods": ["*"],
+                "allowCredentials": False,
+                "exposedResponseHeaders": ["*"],
+                "maxAge": 0,
+            },
+        }
+        zappa_core.lambda_client.list_function_url_configs.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "FunctionUrlConfigs": [
+                {
+                    "FunctionUrl": "https://123456789.lambda-url.ap-southeast-1.on.aws/",
+                    "FunctionArn": function_arn,
+                }
+            ],
+        }
+        zappa_core.lambda_client.update_function_url_config.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "FunctionUrl": "https://123456789.lambda-url.ap-southeast-1.on.aws/",
+            "FunctionArn": function_arn,
+        }
+        zappa_core.lambda_client.get_policy.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "Policy": '{"Version":"2012-10-17","Id":"default","Statement":[{"Sid":"FunctionURLAllowPublicAccess","Effect":"Allow","Principal":"*","Action":"lambda:InvokeFunction","Resource":""}]}',
+        }
+
+        zappa_core.update_lambda_function_url(function_name="abc", function_url_config=function_url_config)
+        boto_mock.client().update_function_url_config.assert_called_with(
+            FunctionName=function_arn,
+            AuthType=function_url_config["authorizer"],
+            Cors={
+                "AllowCredentials": function_url_config["cors"]["allowCredentials"],
+                "AllowHeaders": function_url_config["cors"]["allowedHeaders"],
+                "AllowMethods": function_url_config["cors"]["allowedMethods"],
+                "AllowOrigins": function_url_config["cors"]["allowedOrigins"],
+                "ExposeHeaders": function_url_config["cors"]["exposedResponseHeaders"],
+                "MaxAge": function_url_config["cors"]["maxAge"],
+            },
+        )
+
+        boto_mock.client().get_policy.assert_called_with(
+            FunctionName=function_arn,
+        )
+        boto_mock.client().add_permission.assert_not_called()
+        boto_mock.client().create_function_url_config.assert_not_called()
+
+    @mock.patch("botocore.client")
+    def test_update_lambda_function_url_iam_authorizer(self, client):
+        boto_mock = mock.MagicMock()
+        zappa_core = Zappa(
+            boto_session=boto_mock,
+            profile_name="test",
+            aws_region="test",
+            load_credentials=True,
+        )
+        function_name = "abc"
+        function_arn = "arn:aws:lambda:ap-southeast-1:123456789:function:{}".format(function_name)
+        function_url_config = {
+            "authorizer": "AWS_IAM",
+            "cors": {
+                "allowedOrigins": ["*"],
+                "allowedHeaders": ["*"],
+                "allowedMethods": ["*"],
+                "allowCredentials": False,
+                "exposedResponseHeaders": ["*"],
+                "maxAge": 0,
+            },
+        }
+        zappa_core.lambda_client.list_function_url_configs.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "FunctionUrlConfigs": [
+                {
+                    "FunctionUrl": "https://123456789.lambda-url.ap-southeast-1.on.aws/",
+                    "FunctionArn": function_arn,
+                }
+            ],
+        }
+        zappa_core.lambda_client.update_function_url_config.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "FunctionUrl": "https://123456789.lambda-url.ap-southeast-1.on.aws/",
+            "FunctionArn": function_arn,
+        }
+        zappa_core.lambda_client.get_policy.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "Policy": '{"Version":"2012-10-17","Id":"default","Statement":[{"Sid":"FunctionURLAllowPublicAccess","Effect":"Allow","Principal":"*","Action":"lambda:InvokeFunction","Resource":""}]}',
+        }
+        zappa_core.lambda_client.remove_permission.return_value = {
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+            "Policy": '{"Version":"2012-10-17","Id":"default","Statement":[{"Sid":"FunctionURLAllowPublicAccess","Effect":"Allow","Principal":"*","Action":"lambda:InvokeFunction","Resource":"xxxxx"}]}',
+        }
+        zappa_core.update_lambda_function_url(function_name="abc", function_url_config=function_url_config)
+        boto_mock.client().update_function_url_config.assert_called_with(
+            FunctionName=function_arn,
+            AuthType=function_url_config["authorizer"],
+            Cors={
+                "AllowCredentials": function_url_config["cors"]["allowCredentials"],
+                "AllowHeaders": function_url_config["cors"]["allowedHeaders"],
+                "AllowMethods": function_url_config["cors"]["allowedMethods"],
+                "AllowOrigins": function_url_config["cors"]["allowedOrigins"],
+                "ExposeHeaders": function_url_config["cors"]["exposedResponseHeaders"],
+                "MaxAge": function_url_config["cors"]["maxAge"],
+            },
+        )
+
+        boto_mock.client().get_policy.assert_called_with(
+            FunctionName=function_arn,
+        )
+        boto_mock.client().delete_policy.remove_permission(
+            FunctionName=function_arn, StatementId="FunctionURLAllowPublicAccess"
+        )
+        boto_mock.client().add_permission.assert_not_called()
+        boto_mock.client().create_function_url_config.assert_not_called()
+
+    @mock.patch("botocore.client")
+    def test_delete_lambda_function_url(self, client):
+        boto_mock = mock.MagicMock()
+        zappa_core = Zappa(
+            boto_session=boto_mock,
+            profile_name="test",
+            aws_region="test",
+            load_credentials=True,
+        )
+        function_name = "abc"
+        function_arn = "arn:aws:lambda:ap-southeast-1:123456789:function:{}".format(function_name)
+
+        zappa_core.lambda_client.list_function_url_configs.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "FunctionUrlConfigs": [
+                {
+                    "FunctionUrl": "https://123456789.lambda-url.ap-southeast-1.on.aws/",
+                    "FunctionArn": function_arn,
+                }
+            ],
+        }
+        zappa_core.lambda_client.delete_function_url_config.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 204,
+            }
+        }
+        zappa_core.lambda_client.get_policy.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "Policy": '{"Version":"2012-10-17","Id":"default","Statement":[{"Sid":"FunctionURLAllowPublicAccess","Effect":"Allow","Principal":"*","Action":"lambda:InvokeFunction","Resource":""}]}',
+        }
+        zappa_core.lambda_client.remove_permission.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 204,
+                "RetryAttempts": 0,
+            }
+        }
+        zappa_core.delete_lambda_function_url(function_name=function_arn)
+        boto_mock.client().delete_function_url_config.assert_called_with(
+            FunctionName=function_arn,
+        )
+
+        boto_mock.client().get_policy.assert_called_with(
+            FunctionName=function_arn,
+        )
+        boto_mock.client().delete_policy.remove_permission(
+            FunctionName=function_arn, StatementId="FunctionURLAllowPublicAccess"
+        )
+        boto_mock.client().add_permission.assert_not_called()
+        boto_mock.client().create_function_url_config.assert_not_called()
+        boto_mock.client().update_function_url_config.assert_not_called()
+
+    def test_function_url_create_custom_domain(self):
+        cloud_front_response = {
+            "ResponseMetadata": {
+                "RequestId": "e4410b01-e391-45d4-abe8-4f86508e0619",
+                "HTTPStatusCode": 201,
+                "RetryAttempts": 0,
+            },
+            "Location": "https://cloudfront.amazonaws.com/2020-05-31/distribution/E1YIU775JNY3JV",
+            "ETag": "E1YQ89D7I4GX4C",
+            "Distribution": {
+                "Id": "E1YIU775JNY3JV",
+                "ARN": "arn:aws:cloudfront::123456789:distribution/E1YIU775JNY3JV",
+                "Status": "InProgress",
+                "InProgressInvalidationBatches": 0,
+                "DomainName": "dolayrplf7f1.cloudfront.net",
+                "ActiveTrustedSigners": {"Enabled": False, "Quantity": 0},
+                "ActiveTrustedKeyGroups": {"Enabled": False, "Quantity": 0},
+                "DistributionConfig": {
+                    "CallerReference": "zappa-create-function-url-custom-domain",
+                    "Aliases": {"Quantity": 0},
+                    "DefaultRootObject": "",
+                    "Origins": {
+                        "Quantity": 1,
+                        "Items": [
+                            {
+                                "Id": "LambdaFunctionURL",
+                                "DomainName": "wwvjk2tpuvrr457k3xt4kuryby0qmmzs.lambda-url.ap-southeast-1.on.aws",
+                                "OriginPath": "",
+                                "CustomHeaders": {"Quantity": 0},
+                                "CustomOriginConfig": {
+                                    "HTTPPort": 80,
+                                    "HTTPSPort": 443,
+                                    "OriginProtocolPolicy": "https-only",
+                                    "OriginSslProtocols": {"Quantity": 3, "Items": ["TLSv1", "TLSv1.1", "TLSv1.2"]},
+                                    "OriginReadTimeout": 30,
+                                    "OriginKeepaliveTimeout": 5,
+                                },
+                                "ConnectionAttempts": 3,
+                                "ConnectionTimeout": 10,
+                                "OriginShield": {"Enabled": False},
+                                "OriginAccessControlId": "",
+                            }
+                        ],
+                    },
+                    "OriginGroups": {"Quantity": 0},
+                    "DefaultCacheBehavior": {
+                        "TargetOriginId": "LambdaFunctionURL",
+                        "TrustedSigners": {"Enabled": False, "Quantity": 0},
+                        "TrustedKeyGroups": {"Enabled": False, "Quantity": 0},
+                        "ViewerProtocolPolicy": "redirect-to-https",
+                        "AllowedMethods": {
+                            "Quantity": 7,
+                            "Items": ["HEAD", "DELETE", "POST", "GET", "OPTIONS", "PUT", "PATCH"],
+                            "CachedMethods": {"Quantity": 3, "Items": ["HEAD", "GET", "OPTIONS"]},
+                        },
+                        "SmoothStreaming": False,
+                        "Compress": True,
+                        "LambdaFunctionAssociations": {"Quantity": 0},
+                        "FunctionAssociations": {"Quantity": 0},
+                        "FieldLevelEncryptionId": "",
+                        "ForwardedValues": {
+                            "QueryString": True,
+                            "Cookies": {"Forward": "all"},
+                            "Headers": {"Quantity": 3, "Items": ["Authorization", "Accept", "x-api-key"]},
+                            "QueryStringCacheKeys": {"Quantity": 0},
+                        },
+                    },
+                    "CacheBehaviors": {"Quantity": 0},
+                    "CustomErrorResponses": {"Quantity": 0},
+                    "Comment": "Lambda FunctionURL zappa-function-url-test-dev",
+                    "Logging": {"Enabled": False, "IncludeCookies": False, "Bucket": "", "Prefix": ""},
+                    "PriceClass": "PriceClass_100",
+                    "Enabled": True,
+                    "ViewerCertificate": {
+                        "CloudFrontDefaultCertificate": True,
+                        "SSLSupportMethod": "vip",
+                        "MinimumProtocolVersion": "TLSv1",
+                        "CertificateSource": "cloudfront",
+                    },
+                    "Restrictions": {"GeoRestriction": {"RestrictionType": "none", "Quantity": 0}},
+                    "WebACLId": "",
+                    "HttpVersion": "http2",
+                    "IsIPV6Enabled": True,
+                },
+            },
+        }
+        boto_mock = mock.MagicMock()
+        zappa_core = Zappa(
+            boto_session=boto_mock,
+            profile_name="test",
+            aws_region="test",
+            load_credentials=True,
+        )
+        function_name = "abc"
+        function_arn = "arn:aws:lambda:ap-southeast-1:123456789:function:{}".format(function_name)
+        function_domains = ["function-url-domain.example.com", "function-url-domain-1.example.com"]
+        cert_arn = "arn:aws:acm:us-east-1:123456789:certificate/77bff5cb-03c7-4b11-ba8e-312e6f49a31f"
+        cloudfront_config = {}
+        zappa_core.lambda_client.list_function_url_configs.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "FunctionUrlConfigs": [
+                {
+                    "FunctionUrl": "https://123456789.lambda-url.ap-southeast-1.on.aws/",
+                    "FunctionArn": function_arn,
+                }
+            ],
+        }
+        zappa_core.cloudfront_client.list_distributions.return_value ={
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "DistributionList": {
+                "Items": []
+            },
+
+        }
+        zappa_core.cloudfront_client.create_distribution.return_value = cloud_front_response
+        domains = zappa_core.update_lambda_function_url_domains(
+            function_arn, function_domains, cert_arn, cloudfront_config
+        )
+        boto_mock.client().list_function_url_configs.assert_called_with(
+            FunctionName=function_arn, MaxItems=50
+        )
+        boto_mock.client().list_distributions.assert_called()
+        boto_mock.client().create_distribution.assert_called()
+        assert domains
+
+    def test_function_url_update_custom_domain(self):
+        cloud_front_distribution ={
+                "Id": "E1YIU775JNY3JV",
+                "ARN": "arn:aws:cloudfront::123456789:distribution/E1YIU775JNY3JV",
+                "Status": "InProgress",
+                "InProgressInvalidationBatches": 0,
+                "DomainName": "dolayrplf7f1.cloudfront.net",
+                "ActiveTrustedSigners": {"Enabled": False, "Quantity": 0},
+                "ActiveTrustedKeyGroups": {"Enabled": False, "Quantity": 0},
+                "Origins": {
+                    "Quantity": 1,
+                    "Items": [
+                        {
+                            "Id": "LambdaFunctionURL",
+                            "DomainName": "123456789.lambda-url.ap-southeast-1.on.aws",
+                        }
+                    ],
+                },
+                "DistributionConfig": {
+                    "CallerReference": "zappa-create-function-url-custom-domain",
+                    "Aliases": {"Quantity": 0},
+                    "DefaultRootObject": "",
+
+                    "OriginGroups": {"Quantity": 0},
+                    "DefaultCacheBehavior": {
+                        "TargetOriginId": "LambdaFunctionURL",
+                        "TrustedSigners": {"Enabled": False, "Quantity": 0},
+                        "TrustedKeyGroups": {"Enabled": False, "Quantity": 0},
+                        "ViewerProtocolPolicy": "redirect-to-https",
+                        "AllowedMethods": {
+                            "Quantity": 7,
+                            "Items": ["HEAD", "DELETE", "POST", "GET", "OPTIONS", "PUT", "PATCH"],
+                            "CachedMethods": {"Quantity": 3, "Items": ["HEAD", "GET", "OPTIONS"]},
+                        },
+                        "SmoothStreaming": False,
+                        "Compress": True,
+                        "LambdaFunctionAssociations": {"Quantity": 0},
+                        "FunctionAssociations": {"Quantity": 0},
+                        "FieldLevelEncryptionId": "",
+                        "ForwardedValues": {
+                            "QueryString": True,
+                            "Cookies": {"Forward": "all"},
+                            "Headers": {"Quantity": 3, "Items": ["Authorization", "Accept", "x-api-key"]},
+                            "QueryStringCacheKeys": {"Quantity": 0},
+                        },
+                    },
+                    "CacheBehaviors": {"Quantity": 0},
+                    "CustomErrorResponses": {"Quantity": 0},
+                    "Comment": "Lambda FunctionURL zappa-function-url-test-dev",
+                    "Logging": {"Enabled": False, "IncludeCookies": False, "Bucket": "", "Prefix": ""},
+                    "PriceClass": "PriceClass_100",
+                    "Enabled": True,
+                    "ViewerCertificate": {
+                        "CloudFrontDefaultCertificate": True,
+                        "SSLSupportMethod": "vip",
+                        "MinimumProtocolVersion": "TLSv1",
+                        "CertificateSource": "cloudfront",
+                    },
+                    "Restrictions": {"GeoRestriction": {"RestrictionType": "none", "Quantity": 0}},
+                    "WebACLId": "",
+                    "HttpVersion": "http2",
+                    "IsIPV6Enabled": True,
+                },
+            }
+        cloud_front_response = {
+            "ResponseMetadata": {
+                "RequestId": "e4410b01-e391-45d4-abe8-4f86508e0619",
+                "HTTPStatusCode": 200,
+                "RetryAttempts": 0,
+            },
+            "Location": "https://cloudfront.amazonaws.com/2020-05-31/distribution/E1YIU775JNY3JV",
+            "ETag": "E1YQ89D7I4GX4C",
+            "Distribution": cloud_front_distribution,
+        }
+        boto_mock = mock.MagicMock()
+        zappa_core = Zappa(
+            boto_session=boto_mock,
+            profile_name="test",
+            aws_region="test",
+            load_credentials=True,
+        )
+        function_name = "abc"
+        function_arn = "arn:aws:lambda:ap-southeast-1:123456789:function:{}".format(function_name)
+        function_domains = ["function-url-domain.example.com", "function-url-domain-1.example.com"]
+        cert_arn = "arn:aws:acm:us-east-1:123456789:certificate/77bff5cb-03c7-4b11-ba8e-312e6f49a31f"
+        cloudfront_config = {}
+        zappa_core.lambda_client.list_function_url_configs.return_value = {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "FunctionUrlConfigs": [
+                {
+                    "FunctionUrl": "https://123456789.lambda-url.ap-southeast-1.on.aws/",
+                    "FunctionArn": function_arn,
+                }
+            ],
+        }
+        zappa_core.cloudfront_client.list_distributions.return_value ={
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+            },
+            "DistributionList": {
+                "Items": [cloud_front_distribution]
+            },
+
+        }
+        zappa_core.cloudfront_client.update_distribution.return_value = cloud_front_response
+        domains = zappa_core.update_lambda_function_url_domains(
+            function_arn, function_domains, cert_arn, cloudfront_config
+        )
+        boto_mock.client().list_function_url_configs.assert_called_with(
+            FunctionName=function_arn, MaxItems=50
+        )
+        boto_mock.client().list_distributions.assert_called()
+        boto_mock.client().update_distribution.assert_called()
+        assert domains
 
     @mock.patch("sys.version_info", new_callable=get_unsupported_sys_versioninfo)
     def test_unsupported_version_error(self, *_):
