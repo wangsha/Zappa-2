@@ -871,7 +871,7 @@ to change Zappa's behavior. Use these at your own risk!
         "attach_policy": "my_attach_policy.json", // optional, IAM attach policy JSON file
         "apigateway_policy": "my_apigateway_policy.json", // optional, API Gateway resource policy JSON file
         "architecture": "x86_64", // optional, Set Lambda Architecture, defaults to x86_64. For Graviton 2 use: arm64
-        "function_url_enabled": false, // optional, set to true if you don't want to enable function URL. Default false.
+        "function_url_enabled": false, // optional, set to true if you want to enable function URL. Default false.
         "function_url_config": {
             "authorizer": "NONE", // required if function url is enabled. default None. https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html
             "cors": {
