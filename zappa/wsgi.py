@@ -3,6 +3,7 @@ import logging
 import sys
 from io import BytesIO
 from urllib.parse import unquote, urlencode
+from werkzeug import urls
 
 from .utilities import ApacheNCSAFormatter, merge_headers, titlecase_keys
 
@@ -118,7 +119,6 @@ def create_wsgi_request(
     # https://github.com/Miserlou/Zappa/issues/1188
     headers = titlecase_keys(headers)
 
-    path = unquote(event_info["path"])
     if base_path:
         script_name = "/" + base_path
 
