@@ -3279,7 +3279,6 @@ class TestZappa(unittest.TestCase):
         boto_mock.client().update_distribution.assert_called()
         assert domains
 
-
     @mock.patch("sys.version_info", new_callable=get_sys_versioninfo)
     def test_unsupported_version_error(self, *_):
         from importlib import reload

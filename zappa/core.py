@@ -1513,7 +1513,7 @@ class Zappa:
 
         if function_url_config["authorizer"] == "NONE":
             if not statements:
-                permission_response = self.lambda_client.add_permission(
+                self.lambda_client.add_permission(
                     FunctionName=function_name,
                     StatementId="FunctionURLAllowPublicAccess",
                     Action="lambda:InvokeFunctionUrl",

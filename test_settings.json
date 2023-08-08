@@ -120,7 +120,7 @@
     "lambda_concurrency_enabled": {
         "extends": "ttt888",
         "lambda_concurrency": 6
-     },
+    },
     "addtextmimetypes": {
        "s3_bucket": "lmbda",
        "app_function": "tests.test_app.hello_world",
