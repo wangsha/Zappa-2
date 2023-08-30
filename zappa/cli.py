@@ -1346,7 +1346,7 @@ class ZappaCLI:
 
     def unschedule(self):
         """
-        Given a a list of scheduled functions,
+        Given a list of scheduled functions,
         tear down their regular execution.
         """
 
