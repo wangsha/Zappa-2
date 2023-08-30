@@ -2268,9 +2268,14 @@ class ZappaCLI:
         )
         self.vpc_config = self.stage_config.get("vpc_config", {})
         self.memory_size = self.stage_config.get("memory_size", 512)
-        self.ephemeral_storage = self.stage_config.get(
-            "ephemeral_storage", {"Size": 512}
-        )
+        self.ephemeral_storage = self.stage_config.get("ephemeral_storage", {"Size": 512})
+
+        # Validate ephemeral storage structure and size
+        if "Size" not in self.ephemeral_storage:
+            raise ClickException("Please provide a valid Size for ephemeral_storage in your Zappa settings.")
+        elif not 512 <= self.ephemeral_storage["Size"] <= 10240:
+            raise ClickException("Please provide a valid ephemeral_storage size between 512 - 10240 in your Zappa settings.")
+
         self.app_function = self.stage_config.get("app_function", None)
         self.exception_handler = self.stage_config.get("exception_handler", None)
         self.aws_region = self.stage_config.get("aws_region", None)
