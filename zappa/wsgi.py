@@ -32,7 +32,7 @@ def create_wsgi_request(
         if event_info.get("cookies"):
             headers["cookie"] = "; ".join(event_info["cookies"])
 
-        path = urlencode(event_info["requestContext"]["http"]["path"])
+        path = unquote(event_info["requestContext"]["http"]["path"])
 
         query = event_info.get("queryStringParameters", {})
         query_string = urlencode(query) if query else ""
@@ -70,7 +70,7 @@ def create_wsgi_request(
         else:
             query = event_info.get("queryStringParameters", {})
             query_string = urlencode(query) if query else ""
-        query_string = urlencode(query_string)
+        query_string = unquote(query_string)
 
         # Systems calling the Lambda (other than API Gateway) may not provide the field requestContext
         # Extract remote_user, authorizer if Authorizer is enabled
