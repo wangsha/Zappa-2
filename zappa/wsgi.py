@@ -2,8 +2,8 @@ import base64
 import logging
 import sys
 from io import BytesIO
+from typing import Optional
 from urllib.parse import unquote, urlencode
-from werkzeug import urls
 
 from .utilities import ApacheNCSAFormatter, merge_headers, titlecase_keys
 
@@ -32,11 +32,11 @@ def create_wsgi_request(
         if event_info.get("cookies"):
             headers["cookie"] = "; ".join(event_info["cookies"])
 
-        path = urls.url_unquote(event_info["requestContext"]["http"]["path"])
+        path = urlencode(event_info["requestContext"]["http"]["path"])
 
         query = event_info.get("queryStringParameters", {})
         query_string = urlencode(query) if query else ""
-        query_string = urls.url_unquote(query_string)
+        query_string = unquote(query_string)
 
         # Systems calling the Lambda (other than API Gateway) may not provide the field requestContext
         # Extract remote_user, authorizer if Authorizer is enabled
@@ -52,7 +52,7 @@ def create_wsgi_request(
         method = event_info.get("httpMethod", None)
         headers = merge_headers(event_info) or {}  # Allow for the AGW console 'Test' button to work (Pull #735)
 
-        path = urls.url_unquote(event_info["path"])
+        path = unquote(event_info["path"])
 
         # API Gateway and ALB both started allowing for multi-value querystring
         # params in Nov. 2018. If there aren't multi-value params present, then
@@ -70,7 +70,7 @@ def create_wsgi_request(
         else:
             query = event_info.get("queryStringParameters", {})
             query_string = urlencode(query) if query else ""
-        query_string = urls.url_unquote(query_string)
+        query_string = urlencode(query_string)
 
         # Systems calling the Lambda (other than API Gateway) may not provide the field requestContext
         # Extract remote_user, authorizer if Authorizer is enabled
@@ -187,11 +187,12 @@ def create_wsgi_request(
     return environ
 
 
-def common_log(environ, response, response_time=None):
+def common_log(environ, response, response_time: Optional[int] = None):
     """
     Given the WSGI environ and the response,
     log this event in Common Log Format.
 
+    response_time: response time in micro-seconds
     """
 
     logger = logging.getLogger()
