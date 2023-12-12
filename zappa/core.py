@@ -1662,6 +1662,7 @@ class Zappa:
                     "CachedMethods": {"Quantity": 3, "Items": ["HEAD", "GET", "OPTIONS"]},
                 },
                 "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",  # no cache, details see https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-cache-policies.html
+                "OriginRequestPolicyId": "b689b0a8-53d0-40ab-baf2-68738e2966ac", # noqa: E501 https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-origin-request-policies.html#managed-origin-request-policy-all-viewer-except-host-header
             },
             "Logging": {"Enabled": False, "IncludeCookies": False, "Bucket": "", "Prefix": ""},
             "Restrictions": {"GeoRestriction": {"RestrictionType": "none", **NULL_CONFIG}},
