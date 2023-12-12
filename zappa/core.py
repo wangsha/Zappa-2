@@ -1616,8 +1616,7 @@ class Zappa:
 
         NULL_CONFIG = {"Quantity": 0, "Items": []}
         config = {
-            "CallerReference": "zappa-create-function-url-custom-domain",
-            "Aliases": {"Quantity": len(function_url_domains), "Items": function_url_domains},
+            "CallerReference": "zappa-create-function-url-custom-domain-" + function_name.split(":")[-1],            "Aliases": {"Quantity": len(function_url_domains), "Items": function_url_domains},
             "DefaultRootObject": "",
             "Enabled": True,
             "PriceClass": "PriceClass_100",
@@ -1696,7 +1695,9 @@ class Zappa:
             id = distributions[0]["Id"]
             distribution = self.cloudfront_client.get_distribution(Id=id)
             new_config = distribution["Distribution"]["DistributionConfig"]
-            new_config.update(config)
+            updates = config.copy()
+            updates.pop("CallerReference")
+            new_config.update(updates)
 
             response = self.cloudfront_client.update_distribution(
                 DistributionConfig=new_config, Id=id, IfMatch=distribution["ETag"]
