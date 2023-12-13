@@ -858,7 +858,8 @@ class ZappaCLI:
                 function_name=self.lambda_arn,
                 function_url_config=self.function_url_config,
             )
-            self.zappa.deploy_lambda_function_url(**kwargs)
+            endpoint_url = self.zappa.deploy_lambda_function_url(**kwargs)
+            self.zappa.wait_until_lambda_function_is_updated(function_name=self.lambda_name)
 
         if self.use_apigateway:
             # Create and configure the API Gateway
@@ -904,9 +905,8 @@ class ZappaCLI:
                 else:
                     self.zappa.add_api_stage_to_api_key(api_key=self.api_key, api_id=api_id, stage_name=self.api_stage)
 
-            if self.stage_config.get("touch", True):
-                self.zappa.wait_until_lambda_function_is_updated(function_name=self.lambda_name)
-                self.touch_endpoint(endpoint_url)
+        if self.stage_config.get("touch", True):
+            self.touch_endpoint(endpoint_url)
 
         # Finally, delete the local copy our zip package
         if not source_zip and not docker_image_uri:
@@ -1126,7 +1126,7 @@ class ZappaCLI:
                 function_name=self.lambda_arn,
                 function_url_config=self.function_url_config,
             )
-            self.zappa.update_lambda_function_url(**kwargs)
+            endpoint_url = self.zappa.update_lambda_function_url(**kwargs)[:-1]
         else:
             self.zappa.delete_lambda_function_url(self.lambda_arn)
 
@@ -1145,6 +1145,7 @@ class ZappaCLI:
             endpoint_url += "/" + self.base_path
 
         deployed_string = "Your updated Zappa deployment is " + click.style("live", fg="green", bold=True) + "!"
+        touch_url = endpoint_url
         if self.use_apigateway:
             deployed_string = deployed_string + ": " + click.style("{}".format(endpoint_url), bold=True)
 
@@ -1154,13 +1155,11 @@ class ZappaCLI:
 
                 if endpoint_url != api_url:
                     deployed_string = deployed_string + " (" + api_url + ")"
-
-            if self.stage_config.get("touch", True):
-                self.zappa.wait_until_lambda_function_is_updated(function_name=self.lambda_name)
                 if api_url:
-                    self.touch_endpoint(api_url)
-                elif endpoint_url:
-                    self.touch_endpoint(endpoint_url)
+                    touch_url = api_url
+
+        if self.stage_config.get("touch", True):
+            self.touch_endpoint(touch_url)
 
         click.echo(deployed_string)
 
@@ -1230,8 +1229,8 @@ class ZappaCLI:
         if self.use_alb:
             self.zappa.undeploy_lambda_alb(self.lambda_name)
 
-        if self.function_url_domains:
-            self.zappa.undeploy_function_url_custom_domain(self.lambda_name)
+        # if self.function_url_domains:
+        #     self.zappa.undeploy_function_url_custom_domain(self.lambda_name)
 
         if self.use_apigateway:
             if remove_logs:
@@ -3047,6 +3046,8 @@ class ZappaCLI:
                 + " response code."
             )
 
+        if req.status_code == 200:
+            click.echo(req.text)
 
 ####################################################################
 # Main

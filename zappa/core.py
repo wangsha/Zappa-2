@@ -1567,7 +1567,7 @@ class Zappa:
             )
         print("function URL address: {}".format(response["FunctionUrl"]))
         self.update_function_url_policy(function_name, function_url_config)
-        return response
+        return response["FunctionUrl"]
 
     def update_lambda_function_url(self, function_name, function_url_config):
         response = self.lambda_client.list_function_url_configs(FunctionName=function_name, MaxItems=50)
@@ -1593,8 +1593,9 @@ class Zappa:
                     )
                 print("function URL address: {}".format(response["FunctionUrl"]))
                 self.update_function_url_policy(config["FunctionArn"], function_url_config)
+                return response["FunctionUrl"]
         else:
-            self.deploy_lambda_function_url(function_name, function_url_config)
+            return self.deploy_lambda_function_url(function_name, function_url_config)
 
     def delete_lambda_function_url(self, function_name):
         response = self.lambda_client.list_function_url_configs(FunctionName=function_name, MaxItems=50)
