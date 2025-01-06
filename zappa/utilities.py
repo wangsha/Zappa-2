@@ -211,7 +211,7 @@ def get_runtime_from_python_version():
         if sys.version_info[1] <= 7:
             raise ValueError("Python 3.7 and below are no longer supported.")
         elif sys.version_info[1] in [8, 9, 10, 11, 12, 13]:
-            return "python3." + sys.version_info[1]
+            return "python3." + str(sys.version_info[1])
         else:
             raise ValueError(f"Python f{'.'.join(str(v) for v in sys.version_info[:2])} is not yet supported.")
 
