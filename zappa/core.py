@@ -3078,7 +3078,12 @@ class Zappa:
         # and do not require event permissions. They do require additional permissions on the Lambda roles though.
         # http://docs.aws.amazon.com/lambda/latest/dg/lambda-api-permissions-ref.html
         pull_services = ["dynamodb", "kinesis", "sqs"]
-
+        self.unschedule_events(
+            lambda_name=lambda_name,
+            lambda_arn=lambda_arn,
+            events=events,
+            excluded_source_services=pull_services,
+        )
         # XXX: Not available in Lambda yet.
         # We probably want to execute the latest code.
         # if default:

@@ -1282,7 +1282,7 @@ class ZappaCLI:
         self.zappa.unschedule_events(
             lambda_name=self.lambda_name,
             lambda_arn=self.lambda_arn,
-            events=events,
+            events=[],
             excluded_source_services=["dynamodb", "kinesis", "sqs"],
         )
 
