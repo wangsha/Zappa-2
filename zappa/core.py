@@ -2555,7 +2555,6 @@ class Zappa:
         try:
             self.cf_client.describe_stacks(StackName=name)
         except botocore.client.ClientError:
-
             update = False
 
         if update_only and not update:
@@ -2669,7 +2668,7 @@ class Zappa:
                     if item["name"] == lambda_name:
                         return item["id"]
 
-                logger.exception(f"Could not get API ID. {lambda_name}")
+                logger.exception(f"Could not get API ID. {lambda_name} {self.boto_session.region_name}")
                 logger.exception(response)
                 return None
             except Exception:  # pragma: no cover
