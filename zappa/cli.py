@@ -545,7 +545,7 @@ class ZappaCLI:
                     + click.style(self.api_stage, bold=True)
                     + ".."
                 )
-
+        click.echo(self.vargs)
         # Explicitly define the app function.
         # Related: https://github.com/Miserlou/Zappa/issues/832
         if self.vargs.get("app_function", None):
