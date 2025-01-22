@@ -2660,8 +2660,7 @@ class Zappa:
             response = self.cf_client.describe_stack_resource(StackName=lambda_name, LogicalResourceId="Api")
             return response["StackResourceDetail"].get("PhysicalResourceId", None)
         except Exception as e:  # pragma: no cover
-            print(lambda_name)
-            print(e)
+            logger.exception(e)
             try:
                 # Try the old method (project was probably made on an older, non CF version)
                 response = self.apigateway_client.get_rest_apis(limit=500)
@@ -2670,7 +2669,7 @@ class Zappa:
                     if item["name"] == lambda_name:
                         return item["id"]
 
-                logger.exception("Could not get API ID.")
+                logger.exception(f"Could not get API ID. {lambda_name}")
                 logger.exception(response)
                 return None
             except Exception:  # pragma: no cover
