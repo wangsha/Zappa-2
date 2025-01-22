@@ -1279,6 +1279,13 @@ class ZappaCLI:
         Given a a list of functions and a schedule to execute them,
         setup up regular execution.
         """
+        self.zappa.unschedule_events(
+            lambda_name=self.lambda_name,
+            lambda_arn=self.lambda_arn,
+            events=events,
+            excluded_source_services=["dynamodb", "kinesis", "sqs"],
+        )
+
         events = self.stage_config.get("events", [])
 
         if events:
@@ -1302,7 +1309,6 @@ class ZappaCLI:
                     "description": "Zappa Keep Warm - {}".format(self.lambda_name),
                 }
             )
-
         if events:
             try:
                 function_response = self.zappa.lambda_client.get_function(FunctionName=self.lambda_name)

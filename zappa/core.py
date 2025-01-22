@@ -2555,6 +2555,7 @@ class Zappa:
         try:
             self.cf_client.describe_stacks(StackName=name)
         except botocore.client.ClientError:
+
             update = False
 
         if update_only and not update:
@@ -2658,7 +2659,9 @@ class Zappa:
         try:
             response = self.cf_client.describe_stack_resource(StackName=lambda_name, LogicalResourceId="Api")
             return response["StackResourceDetail"].get("PhysicalResourceId", None)
-        except Exception:  # pragma: no cover
+        except Exception as e:  # pragma: no cover
+            print(lambda_name)
+            print(e)
             try:
                 # Try the old method (project was probably made on an older, non CF version)
                 response = self.apigateway_client.get_rest_apis(limit=500)
@@ -2668,6 +2671,7 @@ class Zappa:
                         return item["id"]
 
                 logger.exception("Could not get API ID.")
+                logger.exception(response)
                 return None
             except Exception:  # pragma: no cover
                 # We don't even have an API deployed. That's okay!
@@ -3080,12 +3084,6 @@ class Zappa:
         # if default:
         #     lambda_arn = lambda_arn + ":$LATEST"
 
-        self.unschedule_events(
-            lambda_name=lambda_name,
-            lambda_arn=lambda_arn,
-            events=events,
-            excluded_source_services=pull_services,
-        )
         for event in events:
             function = event["function"]
             expression = event.get("expression", None)  # single expression
