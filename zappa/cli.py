@@ -929,7 +929,8 @@ class ZappaCLI:
         """
         Repackage and update the function code.
         """
-
+        click.echo(self.stage_config)
+        click.echo(self.zappa.aws_region)
         if not source_zip and not docker_image_uri:
             # Make sure we're in a venv.
             self.check_venv()
