@@ -40,7 +40,7 @@ tqdm = "*"
 troposphere = ">=3.0"
 Werkzeug = "*"
 wheel = "*"
-setuptools = {version = "*", extras = ["core"]}
+setuptools = "*"
 
 [pipenv]
 allow_prereleases = false
